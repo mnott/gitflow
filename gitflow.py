@@ -17,10 +17,6 @@ You can read about the GitFlow branching model here:
 
 - [A successful Git branching model](https://nvie.com/posts/a-successful-git-branching-model/)
 
-Here is an overview:
-
-![](git-branching-model.svg)
-
 The script uses the GitPython library to interact with the Git repository, and the
 InquirerPy library to provide an interactive command-line interface for selecting
 branches and options.
@@ -251,27 +247,29 @@ def get_current_week_tag(prefix: str = "cw-") -> str:
     current_tag = f"{prefix}{current_year}-{current_week:02}"
     return current_tag
 
-def get_next_semver(increment: str) -> str:
+def get_next_semver(increment: str, existing_tags: List[str]) -> str:
     """Generate the next Semantic Versioning (SemVer) tag."""
-    tags = [tag.name for tag in repo.tags if tag.name.startswith("v")]
-    if not tags:
+    if not existing_tags:
         return "v1.0.0"
 
-    tags.sort()
-    latest_tag = tags[-1]
+    existing_tags.sort()
+    latest_tag = existing_tags[-1]
     major, minor, patch = map(int, latest_tag[1:].split('.'))
 
-    if increment == "major":
-        major += 1
-        minor = 0
-        patch = 0
-    elif increment == "minor":
-        minor += 1
-        patch = 0
-    elif increment == "patch":
-        patch += 1
+    while True:
+        if increment == "major":
+            major += 1
+            minor = 0
+            patch = 0
+        elif increment == "minor":
+            minor += 1
+            patch = 0
+        elif increment == "patch":
+            patch += 1
 
-    return f"v{major}.{minor}.{patch}"
+        new_tag = f"v{major}.{minor}.{patch}"
+        if new_tag not in existing_tags:
+            return new_tag
 
 
 #
@@ -311,13 +309,15 @@ def start(
     The name is optional for a release (and for a weekly hotfix branch); if not given, those values will be auto-generated.
     """
     version_tag = None
+    existing_tags = [tag.name for tag in repo.tags]
     if name and branch_type != "release":
         branch_name = f"{branch_type}/{name}"
     elif branch_type == "hotfix":
         week_number = get_week_number(week)
         branch_name = f"hotfix/week-{week_number}"
     elif branch_type == "release":
-        version_tag = get_next_semver(increment)
+        version_tag = get_next_semver(increment, existing_tags)
+        print(f"Next version tag: {version_tag}")
         if name is None:
             name = version_tag
         branch_name = f"release/{name}"
@@ -351,10 +351,16 @@ def start(
                 console.print(f"[yellow]No changes to commit.[/yellow]")
 
         if branch_type == "release" and version_tag:
-            # Tag the release branch
-            repo.git.tag('-a', version_tag, '-m', f"Release {name} {version_tag}")
-            repo.git.push('origin', version_tag)
-            console.print(f"[green]Tagged release branch with {version_tag}[/green]")
+            # Check if the tag already exists
+            existing_tags = [tag.name for tag in repo.tags]
+            if version_tag in existing_tags:
+                console.print(f"[yellow]Tag {version_tag} already exists, skipping tagging[/yellow]")
+            else:
+                # Tag the release branch
+                repo.git.tag('-a', version_tag, '-m', f"Release {name} {version_tag}")
+                repo.git.push('origin', version_tag)
+                console.print(f"[green]Tagged release branch with {version_tag}[/green]")
+
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
 
@@ -543,21 +549,62 @@ def ls():
 # Checkout a branch
 #
 @app.command()
-def checkout():
+def checkout(branch: Optional[str] = typer.Argument(None, help="The branch to switch to")):
     """
-    Switch to a different branch using an interactive menu.
+    Switch to a different branch. If no branch name is provided, show an interactive menu.
 
     Examples:
-    - Switch to a different branch:
+    - Switch to a specific branch:
+        ./gitflow.py checkout feature/new-feature
+    - Show the interactive menu to select a branch:
         ./gitflow.py checkout
     """
     branches = [head.name for head in repo.heads]
-    branch = inquirer.select(message="Select a branch:", choices=branches).execute()
+
+    if not branch:
+        branch = inquirer.select(message="Select a branch:", choices=branches).execute()
+
     try:
         repo.git.checkout(branch)
         console.print(f"[green]Switched to branch {branch}[/green]")
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
+
+#
+# Delete a branch
+#
+@app.command()
+def delete_branch(branch: Optional[str] = typer.Argument(None, help="The branch to delete")):
+    """
+    Delete a branch. If no branch name is provided, show an interactive menu.
+
+    Examples:
+    - Delete a specific branch:
+        ./gitflow.py delete-branch feature/new-feature
+    - Show the interactive menu to select a branch to delete:
+        ./gitflow.py delete-branch
+    """
+    branches = [head.name for head in repo.heads]
+
+    if not branch:
+        branch = inquirer.select(message="Select a branch to delete:", choices=branches).execute()
+
+    try:
+        # Try to delete the branch locally
+        repo.git.branch('-d', branch)
+        console.print(f"[green]Deleted local branch {branch}[/green]")
+
+        # Try to delete the branch remotely
+        repo.git.push('origin', '--delete', branch)
+        console.print(f"[green]Deleted remote branch {branch}[/green]")
+    except GitCommandError as e:
+        if "remote ref does not exist" in str(e):
+            console.print(f"[yellow]Remote branch {branch} does not exist. Proceeding with local deletion.[/yellow]")
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+
+
 
 
 #
