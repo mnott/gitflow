@@ -196,6 +196,24 @@ To cherry-pick the latest commit of a specific file from the current branch into
 ./gitflow.py pick gitflow.py feature/new-feature
 ```
 
+### Delete a Branch
+
+To delete a branch using an interactive menu, run:
+
+```bash
+./gitflow.py delete-branch
+```
+
+
+### Document the script
+
+To re-create the documentation and write it to the output file, run:
+
+```bash
+./gitflow.py doc
+```
+
+
 # License
 
 This script is released under the WTFP License.
@@ -533,16 +551,22 @@ def update(
 @app.command()
 def ls():
     """
-    List all branches.
+    List all branches, including both local and remote.
 
     Examples:
     - List all branches:
         ./gitflow.py ls
     """
-    branches = [head.name for head in repo.heads]
-    branches.sort()  # Sort the branches list
-    for branch in branches:
-        console.print(f"[cyan]{branch}[/cyan]")
+    local_branches = [head.name for head in repo.heads]
+    remote_branches = [ref.name for ref in repo.remote().refs]
+
+    console.print("[cyan]Local branches:[/cyan]")
+    for branch in local_branches:
+        console.print(f"  - {branch}")
+
+    console.print("[cyan]Remote branches:[/cyan]")
+    for branch in remote_branches:
+        console.print(f"  - {branch}")
 
 
 #
@@ -551,58 +575,114 @@ def ls():
 @app.command()
 def checkout(branch: Optional[str] = typer.Argument(None, help="The branch to switch to")):
     """
-    Switch to a different branch. If no branch name is provided, show an interactive menu.
+    Switch to a different branch using an interactive menu or directly if branch name is provided.
 
     Examples:
-    - Switch to a specific branch:
-        ./gitflow.py checkout feature/new-feature
-    - Show the interactive menu to select a branch:
+    - Switch to a different branch interactively:
         ./gitflow.py checkout
+    - Switch to a specific branch:
+        ./gitflow.py checkout develop
     """
-    branches = [head.name for head in repo.heads]
-
-    if not branch:
-        branch = inquirer.select(message="Select a branch:", choices=branches).execute()
-
     try:
-        repo.git.checkout(branch)
-        console.print(f"[green]Switched to branch {branch}[/green]")
+        # List branches
+        local_branches = [f"Local: {head.name}" for head in repo.heads]
+        remote_branches = [f"Remote: {ref.name.replace('origin/', '')}" for ref in repo.remotes.origin.refs]
+
+        if branch is None:
+            # Show menu if no branch is provided
+            branches = local_branches + remote_branches
+            selected = inquirer.select(message="Select a branch:", choices=branches).execute()
+            branch_type, branch_name = selected.split(": ")
+        else:
+            # Check if branch is local or remote
+            if branch in [head.name for head in repo.heads]:
+                branch_type = "Local"
+                branch_name = branch
+            elif branch in [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs]:
+                branch_type = "Remote"
+                branch_name = branch
+            else:
+                console.print(f"[red]Error: Branch '{branch}' not found[/red]")
+                return
+
+        # Detect local or remote branch
+        if branch_type == "Remote":
+            remote_branch = f"origin/{branch_name}"
+        else:
+            remote_branch = None
+
+        # Ensure working directory is clean before switching
+        if repo.is_dirty(untracked_files=True):
+            console.print(f"[red]Error: Working directory is not clean. Please commit or stash your changes before switching branches.[/red]")
+            return
+
+        # Switch to the branch
+        try:
+            if remote_branch:
+                repo.git.checkout('-b', branch_name, remote_branch)
+            else:
+                repo.git.checkout(branch_name)
+            console.print(f"[green]Switched to branch {branch_name}[/green]")
+        except GitCommandError as e:
+            console.print(f"[red]Error: {e}[/red]")
+
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
 
 
 #
 # Delete a branch
 #
 @app.command()
-def delete_branch(branch: Optional[str] = typer.Argument(None, help="The branch to delete")):
+def delete_branch(branch_name: Optional[str] = typer.Argument(None, help="The branch name to delete")):
     """
-    Delete a branch. If no branch name is provided, show an interactive menu.
+    Delete a branch using an interactive menu or by specifying the branch name.
+
+    Parameters:
+    - branch_name: The branch name to delete.
 
     Examples:
-    - Delete a specific branch:
-        ./gitflow.py delete-branch feature/new-feature
-    - Show the interactive menu to select a branch to delete:
+    - Delete a branch using a menu:
         ./gitflow.py delete-branch
+    - Delete a specific branch:
+        ./gitflow.py delete-branch feature/old-feature
     """
-    branches = [head.name for head in repo.heads]
+    # Update local and remote references
+    repo.git.fetch('--all')
+    repo.git.remote('prune', 'origin')
 
-    if not branch:
-        branch = inquirer.select(message="Select a branch to delete:", choices=branches).execute()
+    local_branches = [head.name for head in repo.heads]
+    remote_branches = [ref.name.replace('origin/', '') for ref in repo.remote().refs if ref.name.startswith('origin/')]
+
+    if not branch_name:
+        all_branches = [f"Local: {branch}" for branch in local_branches] + [f"Remote: {branch}" for branch in remote_branches]
+        branch_name = inquirer.select(message="Select a branch to delete:", choices=all_branches).execute()
+
+    if "Local: " in branch_name:
+        branch_name = branch_name.replace("Local: ", "")
+    elif "Remote: " in branch_name:
+        branch_name = branch_name.replace("Remote: ", "")
 
     try:
-        # Try to delete the branch locally
-        repo.git.branch('-d', branch)
-        console.print(f"[green]Deleted local branch {branch}[/green]")
-
-        # Try to delete the branch remotely
-        repo.git.push('origin', '--delete', branch)
-        console.print(f"[green]Deleted remote branch {branch}[/green]")
-    except GitCommandError as e:
-        if "remote ref does not exist" in str(e):
-            console.print(f"[yellow]Remote branch {branch} does not exist. Proceeding with local deletion.[/yellow]")
+        if branch_name in local_branches:
+            repo.git.branch('-d', branch_name)
+            console.print(f"[green]Deleted local branch {branch_name}[/green]")
+        elif branch_name in remote_branches:
+            # Verify if the branch actually exists on the remote
+            remote_branches_actual = [ref.name.replace('origin/', '') for ref in repo.remote().refs]
+            if branch_name in remote_branches_actual:
+                repo.git.push('origin', '--delete', branch_name)
+                console.print(f"[green]Deleted remote branch {branch_name}[/green]")
+            else:
+                console.print(f"[red]Error: Remote branch {branch_name} does not exist[/red]")
         else:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"[red]Error: Invalid branch name format[/red]")
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+
 
 
 
@@ -685,6 +765,50 @@ def push(
         console.print(f"[green]Pushed changes to {branch}[/green]")
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
+
+#
+# Compare
+#
+@app.command()
+def compare(
+    file_path: str = typer.Argument(..., help="The path to the file to compare"),
+    branch1: Optional[str] = typer.Argument(None, help="The first branch to compare"),
+    branch2: Optional[str] = typer.Argument(None, help="The second branch to compare")
+):
+    """
+    Compare the same file in two different branches.
+
+    Parameters:
+    - file_path: The path to the file to compare.
+    - branch1: The first branch to compare.
+    - branch2: The second branch to compare.
+
+    Examples:
+    - Compare a file interactively:
+        ./gitflow.py compare gitflow.py
+    - Compare a file directly:
+        ./gitflow.py compare gitflow.py develop feature/new-feature
+    """
+    try:
+        # List branches
+        local_branches = [head.name for head in repo.heads]
+        remote_branches = [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs]
+
+        if branch1 is None:
+            branches = local_branches + remote_branches
+            branch1 = inquirer.select(message="Select the first branch:", choices=branches).execute()
+
+        if branch2 is None:
+            branches = local_branches + remote_branches
+            branch2 = inquirer.select(message="Select the second branch:", choices=branches).execute()
+
+        # Perform the diff
+        diff = repo.git.diff(f'{branch1}:{file_path}', f'{branch2}:{file_path}')
+        console.print(diff if diff else "[green]No differences found.[/green]")
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+
 
 
 #
