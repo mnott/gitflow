@@ -295,11 +295,12 @@ def get_next_semver(increment: str, existing_tags: List[str]) -> str:
 #
 @app.command()
 def start(
-    name:        Optional[str] = typer.Option(None,     "-n", "--name",      help="Specify the feature, hotfix, or release name"),
-    branch_type: str           = typer.Option("hotfix", "-t", "--type",      help="Specify the branch type: hotfix, feature, or release"),
-    week:        Optional[int] = typer.Option(None,     "-w", "--week",      help="Specify the calendar week"),
-    increment:   str           = typer.Option("patch",  "-i", "--increment", help="Specify the version increment type: major, minor, patch"),
-    message:     Optional[str] = typer.Option(None,     "-m", "--message",   help="Specify a commit message")
+    name:        Optional[str] = typer.Option(None,     "-n", "--name",        help="Specify the feature, hotfix, release, or backup name"),
+    branch_type: str           = typer.Option("hotfix", "-t", "--type",        help="Specify the branch type: hotfix, feature, release, or backup"),
+    week:        Optional[int] = typer.Option(None,     "-w", "--week",        help="Specify the calendar week"),
+    increment:   str           = typer.Option("patch",  "-i", "--increment",   help="Specify the version increment type: major, minor, patch"),
+    message:     Optional[str] = typer.Option(None,     "-m", "--message",     help="Specify a commit message"),
+    skip_switch: bool          = typer.Option(False,    "-s", "--skip-switch", help="Skip switching to main or develop branch before creating the new branch")
 ):
     """
     Start a new feature, hotfix, or release branch.
@@ -313,6 +314,7 @@ def start(
     - week       : The calendar week for a weekly hotfix branch.
     - increment  : The version increment type for release branches ('major', 'minor', or 'patch').
     - message    : An optional commit message.
+    - skip_switch: Whether to skip switching to the main or develop branch before creating the new branch. True is assumed for -t backup.
 
     Examples:
     - Start a weekly update hotfix branch (e.g. for some minor weekly updates):
@@ -323,6 +325,8 @@ def start(
         ./gitflow.py start -t feature -n "new-feature"     -m "Starting new feature"
     - Start a new release branch:
         ./gitflow.py start -t release -m "Starting release" -i "patch"
+    - Start a new backup branch off the current branch (-s is assumed if -t is backup):
+        ./gitflow.py start -t backup -n "backup-branch" -m "Starting backup branch"
 
     The name is optional for a release (and for a weekly hotfix branch); if not given, those values will be auto-generated.
     """
@@ -343,12 +347,16 @@ def start(
         console.print("[red]Error: A feature or release branch must have a name[/red]")
         return
 
+    if branch_type == "backup":
+        skip_switch = True
+
     base_branch = 'main' if branch_type == 'hotfix' else 'develop'
 
     try:
-        # Checkout base branch and pull the latest changes
-        repo.git.checkout(base_branch)
-        repo.git.pull('origin', base_branch)
+        if not skip_switch:
+            # Checkout base branch and pull the latest changes
+            repo.git.checkout(base_branch)
+            repo.git.pull('origin', base_branch)
 
         # Check if the branch already exists
         if branch_name in repo.branches:
@@ -635,18 +643,24 @@ def checkout(branch: Optional[str] = typer.Argument(None, help="The branch to sw
 # Delete a branch
 #
 @app.command()
-def delete_branch(branch_name: Optional[str] = typer.Argument(None, help="The branch name to delete")):
+def delete_branch(
+    branch_name: Optional[str] = typer.Argument(None, help="The branch name to delete"),
+    force: bool = typer.Option(False, "-f", "--force", help="Force delete the branch if it is not fully merged")
+):
     """
     Delete a branch using an interactive menu or by specifying the branch name.
 
     Parameters:
     - branch_name: The branch name to delete.
+    - force: Force delete the branch if it is not fully merged.
 
     Examples:
     - Delete a branch using a menu:
         ./gitflow.py delete-branch
     - Delete a specific branch:
         ./gitflow.py delete-branch feature/old-feature
+    - Force delete a specific branch:
+        ./gitflow.py delete-branch feature/old-feature -f
     """
     # Update local and remote references
     repo.git.fetch('--all')
@@ -666,8 +680,11 @@ def delete_branch(branch_name: Optional[str] = typer.Argument(None, help="The br
 
     try:
         if branch_name in local_branches:
-            repo.git.branch('-d', branch_name)
-            console.print(f"[green]Deleted local branch {branch_name}[/green]")
+            try:
+                repo.git.branch('-d' if not force else '-D', branch_name)
+                console.print(f"[green]Deleted local branch {branch_name}[/green]")
+            except GitCommandError as e:
+                console.print(f"[red]Error: {e}[/red]")
         elif branch_name in remote_branches:
             # Verify if the branch actually exists on the remote
             remote_branches_actual = [ref.name.replace('origin/', '') for ref in repo.remote().refs]
@@ -680,11 +697,6 @@ def delete_branch(branch_name: Optional[str] = typer.Argument(None, help="The br
             console.print(f"[red]Error: Invalid branch name format[/red]")
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
-
-
-
-
-
 
 
 #
