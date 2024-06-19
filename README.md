@@ -17,6 +17,10 @@ You can read about the GitFlow branching model here:
 
 - [A successful Git branching model](https://nvie.com/posts/a-successful-git-branching-model/)
 
+Here is an overview:
+
+![](git-branching-model.svg)
+
 The script uses the GitPython library to interact with the Git repository, and the
 InquirerPy library to provide an interactive command-line interface for selecting
 branches and options.
