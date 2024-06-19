@@ -586,7 +586,7 @@ def ls():
         ./gitflow.py ls
     """
     local_branches = [head.name for head in repo.heads]
-    remote_branches = [ref.name for ref in repo.remote().refs]
+    remote_branches = [ref.name for ref in repo.remote().refs if ref.name != 'origin/HEAD']
 
     console.print("[cyan]Local branches:[/cyan]")
     for branch in local_branches:
@@ -614,7 +614,7 @@ def checkout(branch: Optional[str] = typer.Argument(None, help="The branch to sw
     try:
         # List branches
         local_branches = [f"Local: {head.name}" for head in repo.heads]
-        remote_branches = [f"Remote: {ref.name.replace('origin/', '')}" for ref in repo.remotes.origin.refs]
+        remote_branches = [f"Remote: {ref.name.replace('origin/', '')}" for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
 
         if branch is None:
             # Show menu if no branch is provided
@@ -687,7 +687,7 @@ def delete_branch(
     repo.git.remote('prune', 'origin')
 
     local_branches = [head.name for head in repo.heads]
-    remote_branches = [ref.name.replace('origin/', '') for ref in repo.remote().refs if ref.name.startswith('origin/')]
+    remote_branches = [ref.name.replace('origin/', '') for ref in repo.remote().refs if ref.name.startswith('origin/') and ref.name != 'origin/HEAD']
 
     if not branch_name:
         all_branches = [f"Local: {branch}" for branch in local_branches] + [f"Remote: {branch}" for branch in remote_branches]
@@ -903,7 +903,7 @@ def compare(
     try:
         # List branches
         local_branches = [head.name for head in repo.heads]
-        remote_branches = [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs]
+        remote_branches = [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
 
         if branch1 is None:
             branches = local_branches + remote_branches
@@ -1000,7 +1000,7 @@ def cp(
             # Optionally push the changes if the --push flag is set and the remote branch exists
             if push:
                 try:
-                    remote_branches = repo.git.branch('-r').split('\n')
+                    remote_branches = [branch for branch in repo.git.branch('-r').split('\n') if 'origin/HEAD' not in branch]
                     remote_branch_exists = any(f'origin/{target_branch}' in branch for branch in remote_branches)
 
                     if remote_branch_exists:
