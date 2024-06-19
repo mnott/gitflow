@@ -188,12 +188,27 @@ To push the committed changes to the remote repository, run:
 ./gitflow.py push feature/new-feature
 ```
 
-### Cherry-pick a File
+### Pull Changes
 
-To cherry-pick the latest commit of a specific file from the current branch into a target branch, run:
+To pull changes for the current branch, run:
 
 ```bash
-./gitflow.py pick gitflow.py feature/new-feature
+./gitflow.py pull
+```
+
+To pull changes for all remote branches that you have locally, run:
+
+```bash
+./gitflow.py pull -a
+```
+
+
+### Copy a File
+
+To copy the latest commit of a specific file from the current branch into a target branch, run:
+
+```bash
+./gitflow.py cp gitflow.py feature/new-feature
 ```
 
 ### Delete a Branch
@@ -222,6 +237,7 @@ This script is released under the WTFP License.
 
 
 import sys
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from rich import print
@@ -758,13 +774,13 @@ def commit(
 #
 @app.command()
 def push(
-    branch: str = typer.Argument(..., help="The branch to push changes to")
+    branch: Optional[str] = typer.Argument(None, help="The branch to push changes to")
 ):
     """
     Push the committed changes to the remote repository.
 
     Parameters:
-    - branch: The branch to push changes to.
+    - branch: The branch to push changes to. If not specified, the current branch will be used.
 
     Examples:
     - Push changes to the current branch:
@@ -773,8 +789,86 @@ def push(
         ./gitflow.py push feature/new-feature
     """
     try:
+        # Use the current branch if no branch is provided
+        if branch is None:
+            branch = repo.active_branch.name
+
         repo.git.push('origin', branch)
         console.print(f"[green]Pushed changes to {branch}[/green]")
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+#
+# Pull changes
+#
+@app.command()
+def pull(
+    all_branches: bool = typer.Option(False, "-a", "--all", help="Pull changes for all local branches")
+):
+    """
+    Pull the committed changes from the remote repository.
+
+    Parameters:
+    - all_branches: Pull changes for all local branches if set to True. Defaults to False.
+
+    Examples:
+    - Pull changes for the current branch:
+        ./gitflow.py pull
+    - Pull changes for all local branches:
+        ./gitflow.py pull --all
+    """
+    try:
+        original_branch = repo.active_branch.name
+
+        if all_branches:
+            console.print("[blue]Pulling changes for all local branches...[/blue]")
+            # Fetch all branches from the remote
+            repo.git.fetch('--all')
+
+            # Loop through each local branch and pull updates if there are changes
+            for branch in repo.branches:
+                local_commit = repo.git.rev_parse(branch.name)
+                remote_commit = repo.git.rev_parse(f'origin/{branch.name}')
+                
+                if local_commit != remote_commit:
+                    repo.git.checkout(branch.name)
+                    console.print(f"[blue]Updating branch {branch.name}...[/blue]")
+                    try:
+                        result = subprocess.run(
+                            ["git", "pull", "origin", branch.name],
+                            capture_output=True,
+                            text=True
+                        )
+                        console.print(f"[green]Pulled changes for branch {branch.name}[/green]")
+                        console.print(result.stdout)
+                        if result.stderr:
+                            console.print(result.stderr)
+                    except subprocess.CalledProcessError as e:
+                        console.print(f"[red]Error pulling changes for branch {branch.name}: {e}[/red]")
+                else:
+                    console.print(f"[yellow]Branch {branch.name} is up to date.[/yellow]")
+            
+            # Return to the original branch
+            repo.git.checkout(original_branch)
+            console.print(f"[green]Returned to branch {original_branch}[/green]")
+        else:
+            # Pull changes for the current branch
+            current_branch = repo.active_branch.name
+            console.print(f"[blue]Pulling changes for the current branch {current_branch}...[/blue]")
+            try:
+                result = subprocess.run(
+                    ["git", "pull", "origin", current_branch],
+                    capture_output=True,
+                    text=True
+                )
+                console.print(f"[green]Pulled changes for branch {current_branch}[/green]")
+                console.print(result.stdout)
+                if result.stderr:
+                    console.print(result.stderr)
+            except subprocess.CalledProcessError as e:
+                console.print(f"[red]Error pulling changes for branch {current_branch}: {e}[/red]")
+
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
 
@@ -827,22 +921,27 @@ def compare(
 # Cherry-pick a file from the current branch into a target branch
 #
 @app.command()
-def pick(
-    file_path    : str           = typer.Argument(...,  help="The path to the file to cherry-pick the latest commit for"),
-    target_branch: Optional[str] = typer.Argument(None, help="The target branch to cherry-pick into")
+def cp(
+    file_path    : str           = typer.Argument(...,           help="The path to the file to copy the latest commit for"),
+    target_branch: Optional[str] = typer.Argument(None,          help="The target branch to copy into"),
+    push         : bool          = typer.Option(True,  "--push", help="Push the changes to the remote repository after copying")
 ):
     """
-    Cherry-pick the latest commit of a specific file from the current branch into a target branch.
+    Copy the latest commit of a specific file from the current branch into a target branch.
 
     Parameters:
-    - file_path: The path to the file to cherry-pick the latest commit for.
-    - target_branch: The target branch to cherry-pick into.
+    - file_path: The path to the file to copy the latest commit for.
+    - target_branch: The target branch to copy into.
+    - push: Push the changes to the remote repository after copying if the remote branch exists.
 
     Examples:
-    - Cherry-pick the latest commit of gitflow.py into a feature branch:
-        ./gitflow.py pick gitflow.py feature/new-feature
+    - Copy the latest commit of gitflow.py into a feature branch:
+        ./gitflow.py cp gitflow.py feature/new-feature --push
     """
     try:
+        # Save the current branch
+        original_branch = repo.active_branch.name
+
         # Find the latest commit hash for the specific file
         latest_commit = repo.git.log('-n', '1', '--pretty=format:%H', '--', file_path)
 
@@ -850,10 +949,10 @@ def pick(
             console.print(f"[red]Error: No commits found for {file_path}[/red]")
             return
 
-        # Read the file content before switching branches
+        # Read the file content in the current branch
         try:
             with open(file_path, 'r') as source_file:
-                file_content = source_file.read()
+                current_branch_file_content = source_file.read()
         except FileNotFoundError:
             console.print(f"[red]Error: {file_path} not found in the current branch[/red]")
             return
@@ -861,41 +960,59 @@ def pick(
         # If target_branch is not provided, show a list of branches to select from
         if not target_branch:
             branches = [head.name for head in repo.heads if head.name != repo.active_branch.name]
-            target_branch = inquirer.select(message="Select a branch to cherry-pick into:", choices=branches).execute()
+            target_branch = inquirer.select(message="Select a branch to copy into:", choices=branches).execute()
 
         # Checkout the target branch
         repo.git.checkout(target_branch)
         console.print(f"[green]Switched to branch {target_branch}[/green]")
 
-        # Check if the file exists in the target branch
-        file_exists = Path(file_path).exists()
-
-        if not file_exists:
-            # If the file does not exist, add it manually from the current branch content
-            with open(file_path, 'w') as target_file:
-                target_file.write(file_content)
-            repo.git.add(file_path)
-            repo.git.commit('-m', f"Add {file_path} to enable cherry-pick")
-            console.print(f"[green]Added {file_path} to {target_branch} manually[/green]")
-
-        # Cherry-pick the latest commit
+        # Read the file content in the target branch
+        target_branch_file_content = ""
         try:
-            repo.git.cherry_pick(latest_commit)
+            with open(file_path, 'r') as target_file:
+                target_branch_file_content = target_file.read()
+        except FileNotFoundError:
+            pass  # It's okay if the file does not exist in the target branch
 
-            # Handle conflicts
-            if repo.index.unmerged_blobs():
+        # Compare the file contents
+        if current_branch_file_content == target_branch_file_content:
+            console.print(f"[yellow]File {file_path} is identical in both branches. Skipping copy.[/yellow]")
+        else:
+            # Cherry-pick the latest commit
+            try:
+                result = subprocess.run(["git", "cherry-pick", latest_commit], capture_output=True, text=True)
+                if result.returncode != 0:
+                    console.print(f"[red]Cherry-pick resulted in conflicts. Please resolve them and run 'git cherry-pick --continue' or 'git cherry-pick --abort'.[/red]")
+                    console.print(result.stderr)
+                    console.print("[yellow]To see the conflicts, run 'git status' and check the conflicted files.[/yellow]")
+                    return
+                else:
+                    console.print(f"[green]Copied the latest commit for {file_path} into {target_branch}[/green]")
+
+            except subprocess.CalledProcessError as e:
                 console.print(f"[red]Cherry-pick resulted in conflicts. Please resolve them and run 'git cherry-pick --continue' or 'git cherry-pick --abort'.[/red]")
-            else:
-                console.print(f"[green]Cherry-picked the latest commit for {file_path} into {target_branch}[/green]")
+                return
 
-                # Push the changes to the remote repository
-                repo.git.push('origin', target_branch)
-                console.print(f"[green]Pushed changes to {target_branch}[/green]")
-        except GitCommandError as e:
-            console.print(f"[red]Cherry-pick resulted in conflicts. Please resolve them and run 'git cherry-pick --continue' or 'git cherry-pick --abort'.[/red]")
+            # Optionally push the changes if the --push flag is set and the remote branch exists
+            if push:
+                try:
+                    remote_branches = repo.git.branch('-r').split('\n')
+                    remote_branch_exists = any(f'origin/{target_branch}' in branch for branch in remote_branches)
+
+                    if remote_branch_exists:
+                        repo.git.push('origin', target_branch)
+                        console.print(f"[green]Pushed changes to {target_branch}[/green]")
+                    else:
+                        console.print(f"[yellow]Remote branch {target_branch} does not exist. Skipping push.[/yellow]")
+                except GitCommandError as e:
+                    console.print(f"[red]Error while pushing: {e}[/red]")
+
+        # Return to the original branch
+        repo.git.checkout(original_branch)
+        console.print(f"[green]Returned to branch {original_branch}[/green]")
+
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
-
 
 #
 # Command: Doc

@@ -17,10 +17,6 @@ You can read about the GitFlow branching model here:
 
 - [A successful Git branching model](https://nvie.com/posts/a-successful-git-branching-model/)
 
-Here is an overview:
-
-![](git-branching-model.svg)
-
 The script uses the GitPython library to interact with the Git repository, and the
 InquirerPy library to provide an interactive command-line interface for selecting
 branches and options.
@@ -192,13 +188,46 @@ To push the committed changes to the remote repository, run:
 ./gitflow.py push feature/new-feature
 ```
 
-### Cherry-pick a File
+### Pull Changes
 
-To cherry-pick the latest commit of a specific file from the current branch into a target branch, run:
+To pull changes for the current branch, run:
 
 ```bash
-./gitflow.py pick gitflow.py feature/new-feature
+./gitflow.py pull
 ```
+
+To pull changes for all remote branches that you have locally, run:
+
+```bash
+./gitflow.py pull -a
+```
+
+
+### Copy a File
+
+To copy the latest commit of a specific file from the current branch into a target branch, run:
+
+```bash
+./gitflow.py cp gitflow.py feature/new-feature
+```
+
+### Delete a Branch
+
+To delete a branch using an interactive menu, run:
+
+```bash
+./gitflow.py delete-branch
+```
+
+
+### Document the script
+
+To re-create the documentation and write it to the output file, run:
+
+```bash
+./gitflow.py doc
+```
+
 
 # License
 
