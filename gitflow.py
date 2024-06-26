@@ -516,6 +516,62 @@ def finish(
 
 
 #
+# Weekly update hotfix branches
+#
+@app.command()
+def weekly_update(
+    message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message"),
+):
+    """
+    Pull changes from the weekly-updates branch and merge them into develop and main branches.
+
+    Parameters:
+    - message: An optional commit message for the merge commits.
+
+    Examples:
+    - Pull changes and merge them:
+        ./gitflow.py weekly_update -m "Merging weekly updates"
+    """
+    try:
+        weekly_branch = "weekly-updates"
+        develop_branch = "develop"
+        main_branch = "main"
+
+        # Store the current branch
+        original_branch = repo.active_branch.name
+
+        # Ensure the weekly-updates branch is checked out, fetch it if necessary
+        if weekly_branch not in repo.branches:
+            repo.git.fetch('origin', weekly_branch)
+            repo.git.checkout('-b', weekly_branch, f'origin/{weekly_branch}')
+        else:
+            repo.git.checkout(weekly_branch)
+            repo.git.pull('origin', weekly_branch)
+        console.print(f"[green]Pulled changes from {weekly_branch}[/green]")
+
+        # Merge changes into develop branch
+        repo.git.checkout(develop_branch)
+        repo.git.pull('origin', develop_branch)
+        repo.git.merge(weekly_branch, '--no-ff', m=message or f"Merging changes from {weekly_branch} into {develop_branch}")
+        repo.git.push('origin', develop_branch)
+        console.print(f"[green]Merged changes from {weekly_branch} into {develop_branch}[/green]")
+
+        # Merge changes into main branch
+        repo.git.checkout(main_branch)
+        repo.git.pull('origin', main_branch)
+        repo.git.merge(develop_branch, '--no-ff', m=message or f"Merging changes from {develop_branch} into {main_branch}")
+        repo.git.push('origin', main_branch)
+        console.print(f"[green]Merged changes from {develop_branch} into {main_branch}[/green]")
+
+        # Return to the original branch
+        repo.git.checkout(original_branch)
+        console.print(f"[green]Returned to {original_branch}[/green]")
+
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+#
 # Update from a release branch merging it back into develop
 #
 @app.command()
@@ -834,7 +890,7 @@ def pull(
             for branch in repo.branches:
                 local_commit = repo.git.rev_parse(branch.name)
                 remote_commit = repo.git.rev_parse(f'origin/{branch.name}')
-                
+
                 if local_commit != remote_commit:
                     repo.git.checkout(branch.name)
                     console.print(f"[blue]Updating branch {branch.name}...[/blue]")
@@ -852,7 +908,7 @@ def pull(
                         console.print(f"[red]Error pulling changes for branch {branch.name}: {e}[/red]")
                 else:
                     console.print(f"[yellow]Branch {branch.name} is up to date.[/yellow]")
-            
+
             # Return to the original branch
             repo.git.checkout(original_branch)
             console.print(f"[green]Returned to branch {original_branch}[/green]")
