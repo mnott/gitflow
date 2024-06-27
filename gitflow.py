@@ -314,7 +314,7 @@ def get_next_semver(increment: str, existing_tags: List[str]) -> str:
 @app.command()
 def start(
     name: Optional[str] = typer.Option(None, "-n", "--name", help="Specify the feature, hotfix, release, or backup name"),
-    branch_type: str = typer.Option("hotfix", "-t", "--type", help="Specify the branch type: hotfix, feature, release, or backup"),
+    branch_type: str = typer.Option("hotfix", "-t", "--type", help="Specify the branch type: local, hotfix, feature, release, or backup"),
     week: Optional[int] = typer.Option(None, "-w", "--week", help="Specify the calendar week"),
     increment: str = typer.Option("patch", "-i", "--increment", help="Specify the version increment type: major, minor, patch"),
     message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message"),
@@ -328,7 +328,7 @@ def start(
 
     Parameters:
     - name       : The name of the feature, hotfix, or release branch.
-    - branch_type: The type of branch to create ('hotfix', 'feature', or 'release').
+    - branch_type: The type of branch to create ('local', 'hotfix', 'feature', or 'release').
     - week       : The calendar week for a weekly hotfix branch.
     - increment  : The version increment type for release branches ('major', 'minor', or 'patch').
     - message    : An optional commit message.
@@ -337,7 +337,10 @@ def start(
     version_tag = None
     existing_tags = [tag.name for tag in repo.tags]
     if name and branch_type != "release":
-        branch_name = f"{branch_type}/{name}"
+        if branch_type == "local":
+            branch_name = name
+        else:
+            branch_name = f"{branch_type}/{name}"
     elif branch_type == "hotfix":
         week_number = get_week_number(week)
         branch_name = f"hotfix/week-{week_number}"
@@ -596,6 +599,41 @@ def weekly_update(
         # Store the current branch
         original_branch = repo.active_branch.name
 
+        def has_differences(base_branch: str):
+            try:
+                repo.git.fetch('origin', base_branch)
+                merge_base = repo.git.merge_base(f'origin/{base_branch}', weekly_branch)
+                diff = repo.git.diff(f'{merge_base}..{weekly_branch}')
+                return bool(diff.strip())
+            except GitCommandError as e:
+                console.print(f"[yellow]Warning: Error checking differences with {base_branch}: {e}[/yellow]")
+                return True  # Assume there are differences if we can't check
+
+        def create_pull_request(base_branch: str):
+            if has_differences(base_branch):
+                try:
+                    result = subprocess.run(
+                        ["gh", "pr", "create", "--base", base_branch, "--head", weekly_branch,
+                         "--title", f"Merge {weekly_branch} into {base_branch}", 
+                         "--body", f"Merge weekly updates from {weekly_branch} into {base_branch}"],
+                        capture_output=True, text=True, check=True
+                    )
+                    console.print(f"[green]Created pull request to merge {weekly_branch} into {base_branch}[/green]")
+                    return True
+                except subprocess.CalledProcessError as e:
+                    if "A pull request for branch" in e.stderr:
+                        console.print(f"[yellow]A pull request already exists for {weekly_branch} into {base_branch}[/yellow]")
+                        return True
+                    elif "No commits between" in e.stderr:
+                        console.print(f"[yellow]No commits between {weekly_branch} and {base_branch}. No pull request created.[/yellow]")
+                        return False
+                    else:
+                        console.print(f"[red]Error creating pull request: {e.stderr}[/red]")
+                        return False
+            else:
+                console.print(f"[yellow]No differences found between {weekly_branch} and {base_branch}. Skipping pull request creation.[/yellow]")
+                return False
+
         # Ensure the weekly-updates branch is checked out, fetch it if necessary
         if weekly_branch not in repo.branches:
             repo.git.fetch('origin', weekly_branch)
@@ -605,19 +643,14 @@ def weekly_update(
             repo.git.pull('origin', weekly_branch)
         console.print(f"[green]Pulled changes from {weekly_branch}[/green]")
 
-        # Merge changes into develop branch
-        repo.git.checkout(develop_branch)
-        repo.git.pull('origin', develop_branch)
-        repo.git.merge(weekly_branch, '--no-ff', m=message or f"Merging changes from {weekly_branch} into {develop_branch}")
-        repo.git.push('origin', develop_branch)
-        console.print(f"[green]Merged changes from {weekly_branch} into {develop_branch}[/green]")
+        # Create pull requests for develop and main branches
+        prs_created_develop = create_pull_request(develop_branch)
+        prs_created_main = create_pull_request(main_branch)
 
-        # Merge changes into main branch
-        repo.git.checkout(main_branch)
-        repo.git.pull('origin', main_branch)
-        repo.git.merge(develop_branch, '--no-ff', m=message or f"Merging changes from {develop_branch} into {main_branch}")
-        repo.git.push('origin', main_branch)
-        console.print(f"[green]Merged changes from {develop_branch} into {main_branch}[/green]")
+        if prs_created_develop or prs_created_main:
+            console.print(f"[yellow]Weekly updates branch {weekly_branch} not deleted because pull requests were created.[/yellow]")
+        else:
+            console.print(f"[yellow]No pull requests were created as there were no differences to merge.[/yellow]")
 
         # Return to the original branch
         repo.git.checkout(original_branch)
@@ -627,16 +660,18 @@ def weekly_update(
         console.print(f"[red]Error: {e}[/red]")
 
 
+
+
 #
 # Update from a release branch merging it back into develop
 #
 @app.command()
 def update(
-    name:    Optional[str] = typer.Option(None, "-n", "--name",    help="Specify the release name"),
+    name: Optional[str] = typer.Option(None, "-n", "--name", help="Specify the release name"),
     message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message")
 ):
     """
-    Update the release branch by merging it back into develop.
+    Update the release branch by merging it back into develop, creating pull requests if necessary.
 
     This command can be used to merge bug fixes from the release branch back into develop.
 
@@ -655,32 +690,129 @@ def update(
     branch_name = f"release/{name}"
 
     try:
+        original_branch = repo.active_branch.name
+
+        def has_differences(base_branch: str, compare_branch: str):
+            try:
+                repo.git.fetch('origin', base_branch)
+                merge_base = repo.git.merge_base(f'origin/{base_branch}', compare_branch)
+                diff = repo.git.diff(f'{merge_base}..{compare_branch}')
+                return bool(diff.strip())
+            except GitCommandError as e:
+                console.print(f"[yellow]Warning: Error checking differences with {base_branch}: {e}[/yellow]")
+                return True  # Assume there are differences if we can't check
+
+        def create_pull_request(base_branch: str):
+            if has_differences(base_branch, branch_name):
+                try:
+                    result = subprocess.run(
+                        ["gh", "pr", "create", "--base", base_branch, "--head", branch_name,
+                         "--title", f"Merge {branch_name} into {base_branch}",
+                         "--body", f"Merge bug fixes from {branch_name} into {base_branch}"],
+                        capture_output=True, text=True, check=True
+                    )
+                    console.print(f"[green]Created pull request to merge {branch_name} into {base_branch}[/green]")
+                    return True
+                except subprocess.CalledProcessError as e:
+                    if "A pull request for branch" in e.stderr:
+                        console.print(f"[yellow]A pull request already exists for {branch_name} into {base_branch}[/yellow]")
+                        return True
+                    elif "No commits between" in e.stderr:
+                        console.print(f"[yellow]No commits between {branch_name} and {base_branch}. No pull request created.[/yellow]")
+                        return False
+                    else:
+                        console.print(f"[red]Error creating pull request: {e.stderr}[/red]")
+                        return False
+            else:
+                console.print(f"[yellow]No differences found between {branch_name} and {base_branch}. Skipping pull request creation.[/yellow]")
+                return False
+
         # Checkout the release branch
         repo.git.checkout(branch_name)
 
-        # Add and commit changes if a message is provided
-        if message:
-            repo.git.add('.')
-            if repo.is_dirty(untracked_files=True):
+        # Check for unstaged changes
+        if repo.is_dirty(untracked_files=True):
+            console.print("[yellow]You have unstaged changes.[/yellow]")
+            action = inquirer.select(
+                message="How would you like to proceed?",
+                choices=[
+                    "Commit changes",
+                    "Stash changes",
+                    "Continue without committing",
+                    "Abort"
+                ]
+            ).execute()
+
+            if action == "Commit changes":
+                commit_message = message or inquirer.text(message="Enter commit message:").execute()
+                repo.git.add('.')
+                repo.git.commit('-m', commit_message)
+                console.print("[green]Changes committed.[/green]")
+            elif action == "Stash changes":
+                repo.git.stash('save', f"Stashed changes before updating {branch_name}")
+                console.print("[green]Changes stashed.[/green]")
+            elif action == "Abort":
+                console.print("[yellow]Update operation aborted.[/yellow]")
+                return
+            # If "Continue without committing" is selected, we just proceed
+        elif message:
+            # If there are no unstaged changes but a message was provided, commit any staged changes
+            if repo.index.diff("HEAD"):
                 repo.git.commit('-m', message)
+                console.print(f"[green]Committed changes with message: {message}[/green]")
             else:
-                console.print(f"[yellow]No changes to commit.[/yellow]")
-        else:
-            repo.git.add('.')
-            if repo.is_dirty(untracked_files=True):
-                default_message = "Update release branch."
-                repo.git.commit('-m', default_message)
-                console.print(f"[green]Committed changes with default message: {default_message}[/green]")
+                console.print("[yellow]No changes to commit.[/yellow]")
+
+        # Fetch the latest changes from the remote
+        repo.git.fetch('origin')
+
+        # Check if there are differences between local and remote
+        changes_made = False
+        try:
+            ahead_behind = repo.git.rev_list('--left-right', '--count', f'origin/develop...HEAD').split()
+            behind = int(ahead_behind[0])
+            ahead = int(ahead_behind[1])
+            
+            if ahead > 0:
+                console.print(f"[yellow]Your local branch is {ahead} commit(s) ahead of the remote branch.[/yellow]")
+                changes_made = True
+            elif not changes_made:
+                console.print("[yellow]Your local branch is up to date with the remote branch. No push needed.[/yellow]")
+                return
+        except GitCommandError:
+            # If the remote branch doesn't exist, consider it as having differences
+            changes_made = True
+
+        # Attempt to merge directly into develop
+        try:
+            repo.git.checkout('develop')
+            repo.git.pull('origin', 'develop')
+            repo.git.merge(branch_name, '--no-ff')
+            repo.git.push('origin', 'develop')
+            console.print(f"[green]Merged {branch_name} into develop[/green]")
+        except GitCommandError as e:
+            if "protected branch" in str(e):
+                console.print(f"[yellow]Protected branch detected. Creating a pull request instead.[/yellow]")
+                # Fallback to creating a pull request if direct push fails
+                create_pull_request('develop')
             else:
-                console.print(f"[yellow]No changes to commit.[/yellow]")
+                console.print(f"[red]Error merging {branch_name} into develop: {e}[/red]")
 
-        # Merge release branch into develop
-        repo.git.checkout('develop')
-        repo.git.pull('origin', 'develop')
-        repo.git.merge(branch_name, '--no-ff')
-        repo.git.push('origin', 'develop')
+        # Return to the original branch
+        repo.git.checkout(original_branch)
+        console.print(f"[green]Returned to {original_branch}[/green]")
 
-        console.print(f"[green]Merged {branch_name} into develop[/green]")
+        # If changes were stashed, ask if the user wants to pop them
+        if 'action' in locals() and action == "Stash changes":
+            pop_stash = inquirer.confirm(message="Do you want to pop the stashed changes?", default=True).execute()
+            if pop_stash:
+                try:
+                    repo.git.stash('pop')
+                    console.print("[green]Stashed changes reapplied.[/green]")
+                except GitCommandError as e:
+                    console.print(f"[red]Error reapplying stashed changes: {e}[/red]")
+                    console.print("[yellow]Your changes are still in the stash. You may need to manually resolve conflicts.[/yellow]")
+
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
 
@@ -725,7 +857,7 @@ def checkout(branch: Optional[str] = typer.Argument(None, help="The branch to sw
     """
     try:
         # List branches
-        local_branches = [f"Local: {head.name}" for head in repo.heads]
+        local_branches  = [f"Local : {head.name}" for head in repo.heads]
         remote_branches = [f"Remote: {ref.name.replace('origin/', '')}" for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
 
         if branch is None:
@@ -775,10 +907,10 @@ def checkout(branch: Optional[str] = typer.Argument(None, help="The branch to sw
 # Delete a branch
 #
 @app.command()
-def delete(
+def rm(
     branch_name: Optional[str] = typer.Argument(None, help="The branch name to delete"),
     force: bool = typer.Option(False, "-f", "--force", help="Force delete the branch, even if it's not fully merged or has open pull requests"),
-    cleanup: bool = typer.Option(False, "-c", "--cleanup", help="Cleanup both local and remote branches")
+    all: bool = typer.Option(False, "-a", "--all", help="Delete both local and remote branches with the same name")
 ):
     """
     Delete a branch using an interactive menu or by specifying the branch name.
@@ -786,24 +918,24 @@ def delete(
     Parameters:
     - branch_name: The branch name to delete.
     - force: Force delete the branch, even if it's not fully merged or has open pull requests.
-    - cleanup: Cleanup both local and remote branches after merging.
+    - all: Delete both local and remote branches with the same name.
 
     Examples:
     - Delete a branch using a menu:
-        ./gitflow.py delete
+        ./gitflow.py rm
     - Delete a specific branch:
-        ./gitflow.py delete feature/old-feature
+        ./gitflow.py rm feature/old-feature
     - Force delete a branch (local or remote):
-        ./gitflow.py delete feature/old-feature -f
-    - Cleanup a branch:
-        ./gitflow.py delete -c
+        ./gitflow.py rm feature/old-feature -f
+    - Delete both local and remote branches with the same name:
+        ./gitflow.py rm -a
     """
     # Update local and remote references
     repo.git.fetch('--all')
     repo.git.remote('prune', 'origin')
 
     local_branches = [head.name for head in repo.heads]
-    remote_branches = [ref.name.replace('origin/', '') for ref in repo.remote().refs if ref.name.startswith('origin/') and ref.name != 'origin/HEAD']
+    remote_branches = [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
 
     if not branch_name:
         all_branches = [f"Local: {branch}" for branch in local_branches] + [f"Remote: {branch}" for branch in remote_branches]
@@ -811,8 +943,54 @@ def delete(
 
     if "Local: " in branch_name:
         branch_name = branch_name.replace("Local: ", "")
+        delete_local = True
+        delete_remote = False
     elif "Remote: " in branch_name:
         branch_name = branch_name.replace("Remote: ", "")
+        delete_local = False
+        delete_remote = True
+    else:
+        delete_local = True
+        delete_remote = True
+
+    if branch_name in ['develop', 'main']:
+        console.print("[red]Error: You cannot delete the develop or main branches.[/red]")
+        return
+
+    if branch_name == repo.active_branch.name:
+        console.print("[yellow]Switching to 'develop' branch before deletion.[/yellow]")
+        try:
+            # Check for unstaged changes
+            if repo.is_dirty(untracked_files=True):
+                console.print("[yellow]You have unstaged changes.[/yellow]")
+                action = inquirer.select(
+                    message="How would you like to proceed?",
+                    choices=[
+                        "Commit changes",
+                        "Stash changes",
+                        "Continue without committing",
+                        "Abort"
+                    ]
+                ).execute()
+
+                if action == "Commit changes":
+                    commit_message = inquirer.text(message="Enter commit message:").execute()
+                    repo.git.add('.')
+                    repo.git.commit('-m', commit_message)
+                    console.print("[green]Changes committed.[/green]")
+                elif action == "Stash changes":
+                    repo.git.stash('save', f"Stashed changes before switching to 'develop'")
+                    console.print("[green]Changes stashed.[/green]")
+                elif action == "Abort":
+                    console.print("[yellow]Delete operation aborted.[/yellow]")
+                    return
+                # If "Continue without committing" is selected, we just proceed
+
+            repo.git.checkout('develop')
+            console.print("[green]Switched to 'develop' branch.[/green]")
+        except GitCommandError as e:
+            console.print(f"[red]Error switching to 'develop' branch: {e}[/red]")
+            return
 
     def check_prs(branch_name: str):
         result = subprocess.run(
@@ -826,26 +1004,18 @@ def delete(
             console.print(f"[red]Error checking pull requests: {result.stderr}[/red]")
             return True
 
-    try:
-        if branch_name in local_branches:
+    def delete_branch(branch_name: str, delete_local: bool, delete_remote: bool):
+        if delete_local and branch_name in local_branches:
             try:
-                if cleanup:
-                    for base_branch in ['main', 'develop']:
-                        repo.git.checkout(base_branch)
-                        repo.git.pull('origin', base_branch)
-                        if repo.git.merge_base(branch_name, base_branch) != repo.git.rev_parse(branch_name):
-                            console.print(f"[red]Error: {branch_name} is not fully merged into {base_branch}.[/red]")
-                            return
-                    console.print(f"[green]Branch {branch_name} is fully merged into main and develop.[/green]")
-                
                 repo.git.branch('-d' if not force else '-D', branch_name)
                 console.print(f"[green]Deleted local branch {branch_name}[/green]")
+                local_branches.remove(branch_name)  # Remove from list after successful deletion
             except GitCommandError as e:
-                console.print(f"[red]Error: {e}[/red]")
+                console.print(f"[red]Error deleting local branch {branch_name}: {e}[/red]")
 
-        if branch_name in remote_branches:
+        if delete_remote and branch_name in remote_branches:
             # Verify if the branch actually exists on the remote
-            remote_branches_actual = [ref.name.replace('origin/', '') for ref in repo.remote().refs]
+            remote_branches_actual = [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs]
             if branch_name in remote_branches_actual:
                 has_open_prs = check_prs(branch_name)
                 if has_open_prs and not force:
@@ -856,10 +1026,21 @@ def delete(
                     try:
                         repo.git.push('origin', '--delete', branch_name)
                         console.print(f"[green]Deleted remote branch {branch_name}[/green]")
+                        remote_branches.remove(branch_name)  # Remove from list after successful deletion
                     except GitCommandError as e:
                         console.print(f"[red]Error deleting remote branch {branch_name}: {e}[/red]")
             else:
                 console.print(f"[red]Error: Remote branch {branch_name} does not exist[/red]")
+
+    try:
+        delete_branch(branch_name, delete_local, delete_remote)
+
+        # If the -a flag is specified, delete both local and remote branches with the same name
+        if all:
+            if branch_name in local_branches:
+                delete_branch(branch_name, True, False)
+            if branch_name in remote_branches:
+                delete_branch(branch_name, False, True)
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
