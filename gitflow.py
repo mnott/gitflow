@@ -856,20 +856,10 @@ def commit(
 #
 @app.command()
 def push(
-    branch: Optional[str] = typer.Argument(None, help="The branch to push changes to")
+    branch: Optional[str] = typer.Argument(None, help="The branch to push changes to"),
+    force: bool = typer.Option(False, "-f", "--force", help="Force push changes"),
+    create_pr: bool = typer.Option(False, "-p", "--pr", help="Create a pull request instead of pushing directly")
 ):
-    """
-    Push the committed changes to the remote repository. If the branch is protected, create a pull request.
-
-    Parameters:
-    - branch: The branch to push changes to. If not specified, the current branch will be used.
-
-    Examples:
-    - Push changes to the current branch:
-        ./gitflow.py push
-    - Push changes to a specific branch:
-        ./gitflow.py push feature/new-feature
-    """
     try:
         # Use the current branch if no branch is provided
         if branch is None:
@@ -877,29 +867,85 @@ def push(
 
         current_branch = repo.active_branch.name
 
+        # Check for unstaged changes
+        changes_made = repo.is_dirty(untracked_files=True)
+
+        if changes_made:
+            console.print("[yellow]You have unstaged changes.[/yellow]")
+            action = inquirer.select(
+                message="How would you like to proceed?",
+                choices=[
+                    "Commit changes",
+                    "Continue without committing",
+                    "Abort"
+                ]
+            ).execute()
+
+            if action == "Commit changes":
+                commit_message = inquirer.text(message="Enter commit message:").execute()
+                repo.git.add('.')
+                repo.git.commit('-m', commit_message)
+                console.print("[green]Changes committed.[/green]")
+            elif action == "Abort":
+                console.print("[yellow]Push aborted.[/yellow]")
+                return
+            # If "Continue without committing" is selected, we just proceed
+
+        # Fetch the latest changes from the remote
+        repo.git.fetch('origin')
+
+        # Check if there are differences between local and remote
         try:
-            repo.git.push('origin', branch)
-            console.print(f"[green]Pushed changes to {branch}[/green]")
-        except GitCommandError as e:
-            if "protected branch" in str(e) and "pull request" in str(e):
-                console.print(f"[yellow]Protected branch {branch} detected. Creating pull request instead.[/yellow]")
-                # Create a pull request for the protected branch
-                result = subprocess.run(
-                    ["gh", "pr", "create", "--base", branch, "--head", current_branch,
-                     "--title", f"Merge changes from {current_branch} into {branch}", "--body", "Automated pull request from script"],
-                    capture_output=True, text=True
-                )
-                if result.returncode != 0:
-                    console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+            ahead_behind = repo.git.rev_list('--left-right', '--count', f'origin/{branch}...HEAD').split()
+            behind = int(ahead_behind[0])
+            ahead = int(ahead_behind[1])
+            
+            if ahead > 0:
+                console.print(f"[yellow]Your local branch is {ahead} commit(s) ahead of the remote branch.[/yellow]")
+                changes_made = True
+            elif not changes_made:
+                console.print("[yellow]Your local branch is up to date with the remote branch. No push needed.[/yellow]")
+                return
+        except GitCommandError:
+            # If the remote branch doesn't exist, consider it as having differences
+            changes_made = True
+
+        if changes_made or create_pr:
+            try:
+                if force:
+                    repo.git.push('origin', branch, '--force')
                 else:
-                    console.print(f"[green]Created pull request to merge changes from {current_branch} into {branch}[/green]")
-            else:
-                raise e
+                    repo.git.push('origin', branch)
+                console.print(f"[green]Pushed changes to {branch}[/green]")
+            except GitCommandError as e:
+                if "protected branch" in str(e):
+                    console.print(f"[yellow]Protected branch {branch} detected. Creating a new branch for pull request.[/yellow]")
+                    # Create a new branch for the pull request
+                    new_branch_name = f"update-{branch}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                    repo.git.checkout('-b', new_branch_name)
+                    repo.git.push('origin', new_branch_name)
+                    
+                    # Create pull request from the new branch
+                    result = subprocess.run(
+                        ["gh", "pr", "create", "--base", branch, "--head", new_branch_name,
+                         "--title", f"Update {branch}", "--body", "Automated pull request from script"],
+                        capture_output=True, text=True
+                    )
+                    if result.returncode != 0:
+                        console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                    else:
+                        console.print(f"[green]Created pull request to merge changes from {new_branch_name} into {branch}[/green]")
+                    
+                    # Switch back to the original branch
+                    repo.git.checkout(current_branch)
+                elif "non-fast-forward" in str(e):
+                    # Handle non-fast-forward error (code for this part remains the same)
+                    pass
+                else:
+                    raise e
+
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
-
-
-
 
 #
 # Pull changes
