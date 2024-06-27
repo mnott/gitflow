@@ -206,7 +206,6 @@ To pull changes for all remote branches that you have locally, run:
 ./gitflow.py pull -a
 ```
 
-
 ### Copy a File
 
 To copy the latest commit of a specific file from the current branch into a target branch, run:
@@ -220,7 +219,7 @@ To copy the latest commit of a specific file from the current branch into a targ
 To delete a branch using an interactive menu, run:
 
 ```bash
-./gitflow.py delete
+./gitflow.py rm
 ```
 
 
@@ -241,6 +240,7 @@ This script is released under the WTFP License.
 
 
 import sys
+import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -248,6 +248,9 @@ from rich import print
 from rich import traceback
 from rich import pretty
 from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich import box
 import typer
 from git import Repo, GitCommandError
 from typing import Optional, List
@@ -266,18 +269,36 @@ app = typer.Typer(
 )
 
 # Initialize the Git repository
-try:
-    repo = Repo(Path.cwd())
-except GitCommandError:
-    console.print("[red]Error: Not a valid Git repository[/red]")
+def find_git_repo(path):
+    try:
+        return Repo(path, search_parent_directories=True)
+    except GitCommandError:
+        return None
+
+# Try to find the Git repository
+current_path = Path.cwd()
+repo = find_git_repo(current_path)
+
+if repo is None:
+    console.print("[red]Error: Not in a valid Git repository[/red]")
     sys.exit(1)
 
+# Get the repository root directory
+repo_root = Path(repo.git.rev_parse("--show-toplevel"))
+
+# Change the working directory to the repository root
+os.chdir(repo_root)
+
+
+# Get the current week number
 def get_week_number(week: Optional[int] = None) -> str:
     """Get the current week number in the format YYYY-WW."""
     if week is None:
         week = datetime.now().isocalendar()[1]
     return f"{datetime.now().year}-{week:02}"
 
+
+# Get the current week tag
 def get_current_week_tag(prefix: str = "cw-") -> str:
     """Generate a tag for the current week."""
     current_year = datetime.now().year
@@ -285,6 +306,8 @@ def get_current_week_tag(prefix: str = "cw-") -> str:
     current_tag = f"{prefix}{current_year}-{current_week:02}"
     return current_tag
 
+
+# Get the next Semantic Versioning (SemVer) tag
 def get_next_semver(increment: str, existing_tags: List[str]) -> str:
     """Generate the next Semantic Versioning (SemVer) tag."""
     if not existing_tags:
@@ -310,15 +333,76 @@ def get_next_semver(increment: str, existing_tags: List[str]) -> str:
             return new_tag
 
 
+# Check for Branch Differences
+def has_differences(base_branch: str, compare_branch: str):
+    try:
+        repo.git.fetch('origin', base_branch)
+        merge_base = repo.git.merge_base(f'origin/{base_branch}', compare_branch)
+        diff = repo.git.diff(f'{merge_base}..{compare_branch}')
+        return bool(diff.strip())
+    except GitCommandError as e:
+        console.print(f"[yellow]Warning: Error checking differences with {base_branch}: {e}[/yellow]")
+        return True  # Assume there are differences if we can't check
 
+
+# Create pull requests
+def create_pull_request(base_branch: str, branch_name: str, branch_type: str):
+    force_create = branch_type == "release"
+    console.print(f"[blue]Checking differences between {base_branch} and {branch_name}[/blue]")
+    if has_differences(base_branch, branch_name) or force_create:
+        try:
+            console.print(f"[blue]Attempting to create pull request from {branch_name} to {base_branch}[/blue]")
+            result = subprocess.run(
+                ["gh", "pr", "create", "--base", base_branch, "--head", branch_name,
+                    "--title", f"Merge {branch_name} into {base_branch}", 
+                    "--body", f"Merge {branch_type} {branch_name} into {base_branch}"],
+                capture_output=True, text=True, check=True
+            )
+            console.print(f"[green]Created pull request to merge {branch_name} into {base_branch}[/green]")
+            return True
+        except subprocess.CalledProcessError as e:
+            if "A pull request for branch" in e.stderr:
+                console.print(f"[yellow]A pull request already exists for {branch_name} into {base_branch}[/yellow]")
+                return True
+            elif "No commits between" in e.stderr:
+                console.print(f"[yellow]No commits between {branch_name} and {base_branch}. No pull request created.[/yellow]")
+                return False
+            else:
+                console.print(f"[red]Error creating pull request: {e.stderr}[/red]")
+                return False
+    else:
+        console.print(f"[yellow]No differences found between {branch_name} and {base_branch}. Skipping pull request creation.[/yellow]")
+        return False
+
+
+#
+# Helper Function to split a commit message body at the 72nd character
+#
+def split_message_body(body: str) -> str:
+    """Splits the commit message body at the 72nd character, avoiding word splits."""
+    lines = []
+    for paragraph in body.split('\n'):
+        while len(paragraph) > 72:
+            split_pos = paragraph.rfind(' ', 0, 72)
+            if split_pos == -1:
+                split_pos = 72
+            lines.append(paragraph[:split_pos])
+            paragraph = paragraph[split_pos:].strip()
+        lines.append(paragraph)
+    return '\n'.join(lines)
+
+
+#
+# Start a new feature, hotfix, or release branch
+#
 @app.command()
 def start(
-    name: Optional[str] = typer.Option(None, "-n", "--name", help="Specify the feature, hotfix, release, or backup name"),
-    branch_type: str = typer.Option("hotfix", "-t", "--type", help="Specify the branch type: local, hotfix, feature, release, or backup"),
-    week: Optional[int] = typer.Option(None, "-w", "--week", help="Specify the calendar week"),
-    increment: str = typer.Option("patch", "-i", "--increment", help="Specify the version increment type: major, minor, patch"),
-    message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message"),
-    skip_switch: bool = typer.Option(False, "-s", "--skip-switch", help="Skip switching to main or develop branch before creating the new branch")
+    name:        Optional[str] = typer.Option(None,     "-n", "--name",        help="Specify the feature, hotfix, release, or backup name"),
+    branch_type: str           = typer.Option("hotfix", "-t", "--type",        help="Specify the branch type: local, hotfix, feature, release, or backup"),
+    week:        Optional[int] = typer.Option(None,     "-w", "--week",        help="Specify the calendar week"),
+    increment:   str           = typer.Option("patch",  "-i", "--increment",   help="Specify the version increment type: major, minor, patch"),
+    message:     Optional[str] = typer.Option(None,     "-m", "--message",     help="Specify a commit message"),
+    skip_switch: bool          = typer.Option(False,    "-s", "--skip-switch", help="Skip switching to main or develop branch before creating the new branch")
 ):
     """
     Start a new feature, hotfix, or release branch.
@@ -392,26 +476,28 @@ def start(
         console.print(f"[red]Error: {e}[/red]")
 
 
-
+#
+# Finish a feature, hotfix, or release branch
+#
 @app.command()
 def finish(
-    name: Optional[str] = typer.Option(None, "-n", "--name", help="Specify the feature, hotfix, or release name"),
-    branch_type: str = typer.Option("hotfix", "-t", "--type", help="Specify the branch type: local, hotfix, feature, or release"),
-    week: Optional[int] = typer.Option(None, "-w", "--week", help="Specify the calendar week"),
-    message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message"),
-    body: Optional[str] = typer.Option(None, "--body", "-b", help="Specify a commit message body"),
-    delete: bool = typer.Option(True, "-d", "--delete", help="Delete the feature, hotfix, or release branch after creating PRs")
+    name:        Optional[str] = typer.Option(None,     "-n", "--name",    help="Specify the feature, hotfix, or release name"),
+    branch_type: str           = typer.Option("hotfix", "-t", "--type",    help="Specify the branch type: local, hotfix, feature, or release"),
+    week:        Optional[int] = typer.Option(None,     "-w", "--week",    help="Specify the calendar week"),
+    message:     Optional[str] = typer.Option(None,     "-m", "--message", help="Specify a commit message"),
+    body:        Optional[str] = typer.Option(None,     "-b", "--body",    help="Specify a commit message body"),
+    delete:      bool          = typer.Option(True,     "-d", "--delete",  help="Delete the feature, hotfix, or release branch after finishing")
 ):
     """
     Finish the feature, hotfix, or release by creating pull requests for main and/or develop.
 
     Parameters:
-    - name: The name of the feature, hotfix, or release branch.
+    - name       : The name of the feature, hotfix, or release branch.
     - branch_type: The type of branch to finish ('hotfix', feature, or 'release').
-    - week: The calendar week for a weekly hotfix branch.
-    - message: An optional commit message.
-    - body: An optional commit message body.
-    - delete: Whether to delete the feature, hotfix, or release branch after creating PRs.
+    - week       : The calendar week for a weekly hotfix branch.
+    - message    : An optional commit message.
+    - body       : An optional commit message body.
+    - delete     : Whether to delete the feature, hotfix, or release branch after creating PRs.
     """
     # Determine the branch name
     if name and branch_type != "release":
@@ -489,55 +575,18 @@ def finish(
 
         prs_created = False
 
-        def has_differences(base_branch: str):
-            try:
-                repo.git.fetch('origin', base_branch)
-                merge_base = repo.git.merge_base(f'origin/{base_branch}', branch_name)
-                diff = repo.git.diff(f'{merge_base}..{branch_name}')
-                return bool(diff.strip())
-            except GitCommandError as e:
-                console.print(f"[yellow]Warning: Error checking differences with {base_branch}: {e}[/yellow]")
-                return True  # Assume there are differences if we can't check
-
         if branch_type == "release":
             # Push the tag to the remote
             tag_name = name if name else repo.git.describe('--tags', '--abbrev=0')
             repo.git.push('origin', tag_name)
             console.print(f"[green]Pushed tag {tag_name} to remote[/green]")
 
-        # Create pull requests
-        def create_pull_request(base_branch: str):
-            force_create = branch_type == "release"
-            if has_differences(base_branch) or force_create:
-                try:
-                    result = subprocess.run(
-                        ["gh", "pr", "create", "--base", base_branch, "--head", branch_name,
-                         "--title", f"Merge {branch_name} into {base_branch}", 
-                         "--body", f"Merge {branch_type} {branch_name} into {base_branch}"],
-                        capture_output=True, text=True, check=True
-                    )
-                    console.print(f"[green]Created pull request to merge {branch_name} into {base_branch}[/green]")
-                    return True
-                except subprocess.CalledProcessError as e:
-                    if "A pull request for branch" in e.stderr:
-                        console.print(f"[yellow]A pull request already exists for {branch_name} into {base_branch}[/yellow]")
-                        return True
-                    elif "No commits between" in e.stderr:
-                        console.print(f"[yellow]No commits between {branch_name} and {base_branch}. No pull request created.[/yellow]")
-                        return False
-                    else:
-                        console.print(f"[red]Error creating pull request: {e.stderr}[/red]")
-                        return False
-            else:
-                console.print(f"[yellow]No differences found between {branch_name} and {base_branch}. Skipping pull request creation.[/yellow]")
-                return False
-
         if branch_type == "release" or branch_type == "hotfix":
-            prs_created_main = create_pull_request("main")
-            prs_created_develop = create_pull_request("develop")
+            prs_created_main    = create_pull_request("main",    branch_name, branch_type)
+            prs_created_develop = create_pull_request("develop", branch_name, branch_type)
             prs_created = prs_created_main or prs_created_develop
         else:  # feature
-            prs_created = create_pull_request("develop")
+            prs_created = create_pull_request("develop", branch_name, branch_type)
 
         if prs_created:
             console.print(f"[yellow]Branch {branch_name} not deleted because pull requests were created.[/yellow]")
@@ -580,26 +629,26 @@ def finish(
             console.print("[green]Returned to develop branch.[/green]")
 
 
-
-
-
-
 #
 # Weekly update hotfix branches
 #
 @app.command()
 def weekly_update(
     message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message"),
+    body:    Optional[str] = typer.Option(None, "-b", "--body",    help="Specify a commit message body"),
 ):
     """
-    Pull changes from the weekly-updates branch and merge them into develop and main branches.
+    Pull changes from the weekly-updates branch, commit any new changes, push them, and then merge them into develop and main branches.
 
     Parameters:
     - message: An optional commit message for the merge commits.
+    - body   : An optional commit message body for the merge commits.
 
     Examples:
-    - Pull changes and merge them:
+    - Pull changes, commit, push, and merge them:
         ./gitflow.py weekly_update -m "Merging weekly updates"
+    - Pull changes, commit with a message body, push, and merge them:
+        ./gitflow.py weekly_update -m "Merging weekly updates" -b "This includes documentation updates from the team."
     """
     try:
         weekly_branch = "weekly-updates"
@@ -608,41 +657,6 @@ def weekly_update(
 
         # Store the current branch
         original_branch = repo.active_branch.name
-
-        def has_differences(base_branch: str):
-            try:
-                repo.git.fetch('origin', base_branch)
-                merge_base = repo.git.merge_base(f'origin/{base_branch}', weekly_branch)
-                diff = repo.git.diff(f'{merge_base}..{weekly_branch}')
-                return bool(diff.strip())
-            except GitCommandError as e:
-                console.print(f"[yellow]Warning: Error checking differences with {base_branch}: {e}[/yellow]")
-                return True  # Assume there are differences if we can't check
-
-        def create_pull_request(base_branch: str):
-            if has_differences(base_branch):
-                try:
-                    result = subprocess.run(
-                        ["gh", "pr", "create", "--base", base_branch, "--head", weekly_branch,
-                         "--title", f"Merge {weekly_branch} into {base_branch}", 
-                         "--body", f"Merge weekly updates from {weekly_branch} into {base_branch}"],
-                        capture_output=True, text=True, check=True
-                    )
-                    console.print(f"[green]Created pull request to merge {weekly_branch} into {base_branch}[/green]")
-                    return True
-                except subprocess.CalledProcessError as e:
-                    if "A pull request for branch" in e.stderr:
-                        console.print(f"[yellow]A pull request already exists for {weekly_branch} into {base_branch}[/yellow]")
-                        return True
-                    elif "No commits between" in e.stderr:
-                        console.print(f"[yellow]No commits between {weekly_branch} and {base_branch}. No pull request created.[/yellow]")
-                        return False
-                    else:
-                        console.print(f"[red]Error creating pull request: {e.stderr}[/red]")
-                        return False
-            else:
-                console.print(f"[yellow]No differences found between {weekly_branch} and {base_branch}. Skipping pull request creation.[/yellow]")
-                return False
 
         # Ensure the weekly-updates branch is checked out, fetch it if necessary
         if weekly_branch not in repo.branches:
@@ -653,9 +667,53 @@ def weekly_update(
             repo.git.pull('origin', weekly_branch)
         console.print(f"[green]Pulled changes from {weekly_branch}[/green]")
 
+        # Check for changes
+        if repo.is_dirty(untracked_files=True):
+            # Prepare the commit message
+            if message is None:
+                message = inquirer.text(message="Enter commit message:").execute()
+            if body is None:
+                body = inquirer.text(message="Enter commit body (optional, press enter to skip):", default="").execute()
+
+            full_commit_message = message
+            if body:
+                full_commit_message += "\n\n" + split_message_body(body)
+
+            # Commit changes
+            repo.git.add('.')
+            repo.git.commit('-m', full_commit_message)
+            console.print("[green]Changes committed.[/green]")
+
+            # Push changes
+            repo.git.push('origin', weekly_branch)
+            console.print(f"[green]Pushed changes to {weekly_branch}[/green]")
+        else:
+            console.print("[yellow]No changes to commit.[/yellow]")
+
         # Create pull requests for develop and main branches
-        prs_created_develop = create_pull_request(develop_branch)
-        prs_created_main = create_pull_request(main_branch)
+        def create_weekly_pr(base_branch: str):
+            try:
+                result = subprocess.run(
+                    ["gh", "pr", "create", "--base", base_branch, "--head", weekly_branch,
+                     "--title", f"Merge weekly updates into {base_branch}", 
+                     "--body", full_commit_message if 'full_commit_message' in locals() else "Merging weekly updates"],
+                    capture_output=True, text=True, check=True
+                )
+                console.print(f"[green]Created pull request to merge {weekly_branch} into {base_branch}[/green]")
+                return True
+            except subprocess.CalledProcessError as e:
+                if "A pull request for branch" in e.stderr:
+                    console.print(f"[yellow]A pull request already exists for {weekly_branch} into {base_branch}[/yellow]")
+                    return True
+                elif "No commits between" in e.stderr:
+                    console.print(f"[yellow]No commits between {weekly_branch} and {base_branch}. No pull request created.[/yellow]")
+                    return False
+                else:
+                    console.print(f"[red]Error creating pull request: {e.stderr}[/red]")
+                    return False
+
+        prs_created_develop = create_weekly_pr(develop_branch)
+        prs_created_main = create_weekly_pr(main_branch)
 
         if prs_created_develop or prs_created_main:
             console.print(f"[yellow]Weekly updates branch {weekly_branch} not deleted because pull requests were created.[/yellow]")
@@ -670,29 +728,15 @@ def weekly_update(
         console.print(f"[red]Error: {e}[/red]")
 
 
-
-
 #
 # Update from a release branch merging it back into develop
 #
 @app.command()
 def update(
-    name: Optional[str] = typer.Option(None, "-n", "--name", help="Specify the release name"),
-    message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message")
+    name:    Optional[str] = typer.Option(None, "-n", "--name",    help="Specify the release name"),
+    message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message"),
+    body:    Optional[str] = typer.Option(None, "-b", "--body",    help="Specify a commit message body")
 ):
-    """
-    Update the release branch by merging it back into develop, creating pull requests if necessary.
-
-    This command can be used to merge bug fixes from the release branch back into develop.
-
-    Parameters:
-    - name: The name of the release branch.
-    - message: An optional commit message.
-
-    Examples:
-    - Update the release branch:
-        ./gitflow.py update -n "1.2.0" -m "Merging bug fixes from release 1.2.0"
-    """
     if not name:
         console.print("[red]Error: A release branch must have a name[/red]")
         return
@@ -702,43 +746,9 @@ def update(
     try:
         original_branch = repo.active_branch.name
 
-        def has_differences(base_branch: str, compare_branch: str):
-            try:
-                repo.git.fetch('origin', base_branch)
-                merge_base = repo.git.merge_base(f'origin/{base_branch}', compare_branch)
-                diff = repo.git.diff(f'{merge_base}..{compare_branch}')
-                return bool(diff.strip())
-            except GitCommandError as e:
-                console.print(f"[yellow]Warning: Error checking differences with {base_branch}: {e}[/yellow]")
-                return True  # Assume there are differences if we can't check
-
-        def create_pull_request(base_branch: str):
-            if has_differences(base_branch, branch_name):
-                try:
-                    result = subprocess.run(
-                        ["gh", "pr", "create", "--base", base_branch, "--head", branch_name,
-                         "--title", f"Merge {branch_name} into {base_branch}",
-                         "--body", f"Merge bug fixes from {branch_name} into {base_branch}"],
-                        capture_output=True, text=True, check=True
-                    )
-                    console.print(f"[green]Created pull request to merge {branch_name} into {base_branch}[/green]")
-                    return True
-                except subprocess.CalledProcessError as e:
-                    if "A pull request for branch" in e.stderr:
-                        console.print(f"[yellow]A pull request already exists for {branch_name} into {base_branch}[/yellow]")
-                        return True
-                    elif "No commits between" in e.stderr:
-                        console.print(f"[yellow]No commits between {branch_name} and {base_branch}. No pull request created.[/yellow]")
-                        return False
-                    else:
-                        console.print(f"[red]Error creating pull request: {e.stderr}[/red]")
-                        return False
-            else:
-                console.print(f"[yellow]No differences found between {branch_name} and {base_branch}. Skipping pull request creation.[/yellow]")
-                return False
-
         # Checkout the release branch
         repo.git.checkout(branch_name)
+        console.print(f"[blue]Checked out {branch_name}[/blue]")
 
         # Check for unstaged changes
         if repo.is_dirty(untracked_files=True):
@@ -755,8 +765,10 @@ def update(
 
             if action == "Commit changes":
                 commit_message = message or inquirer.text(message="Enter commit message:").execute()
+                commit_body = body or inquirer.text(message="Enter commit body (optional, press enter to skip):", default="").execute()
+                full_commit_message = commit_message + "\n\n" + split_message_body(commit_body) if commit_body else commit_message
                 repo.git.add('.')
-                repo.git.commit('-m', commit_message)
+                repo.git.commit('-m', full_commit_message)
                 console.print("[green]Changes committed.[/green]")
             elif action == "Stash changes":
                 repo.git.stash('save', f"Stashed changes before updating {branch_name}")
@@ -764,50 +776,43 @@ def update(
             elif action == "Abort":
                 console.print("[yellow]Update operation aborted.[/yellow]")
                 return
-            # If "Continue without committing" is selected, we just proceed
         elif message:
-            # If there are no unstaged changes but a message was provided, commit any staged changes
             if repo.index.diff("HEAD"):
-                repo.git.commit('-m', message)
-                console.print(f"[green]Committed changes with message: {message}[/green]")
+                commit_body = body or inquirer.text(message="Enter commit body (optional, press enter to skip):", default="").execute()
+                full_commit_message = message + "\n\n" + split_message_body(commit_body) if commit_body else message
+                repo.git.commit('-m', full_commit_message)
+                console.print(f"[green]Committed changes with message: {full_commit_message}[/green]")
             else:
                 console.print("[yellow]No changes to commit.[/yellow]")
 
         # Fetch the latest changes from the remote
         repo.git.fetch('origin')
+        console.print("[blue]Fetched latest changes from remote[/blue]")
 
-        # Check if there are differences between local and remote
-        changes_made = False
-        try:
-            ahead_behind = repo.git.rev_list('--left-right', '--count', f'origin/develop...HEAD').split()
-            behind = int(ahead_behind[0])
-            ahead = int(ahead_behind[1])
-            
-            if ahead > 0:
-                console.print(f"[yellow]Your local branch is {ahead} commit(s) ahead of the remote branch.[/yellow]")
-                changes_made = True
-            elif not changes_made:
-                console.print("[yellow]Your local branch is up to date with the remote branch. No push needed.[/yellow]")
-                return
-        except GitCommandError:
-            # If the remote branch doesn't exist, consider it as having differences
-            changes_made = True
+        # Push the release branch to remote
+        repo.git.push('origin', branch_name)
+        console.print(f"[green]Pushed changes to remote {branch_name}[/green]")
 
-        # Attempt to merge directly into develop
-        try:
-            repo.git.checkout('develop')
-            repo.git.pull('origin', 'develop')
-            repo.git.merge(branch_name, '--no-ff')
-            repo.git.push('origin', 'develop')
-            console.print(f"[green]Merged {branch_name} into develop[/green]")
-        except GitCommandError as e:
-            if "protected branch" in str(e):
-                console.print(f"[yellow]Protected branch detected. Creating a pull request instead.[/yellow]")
-                # Fallback to creating a pull request if direct push fails
-                create_pull_request('develop')
-            else:
-                console.print(f"[red]Error merging {branch_name} into develop: {e}[/red]")
+        # Check if there are differences between release and develop branches
+        changes_made = has_differences('develop', branch_name)
+        console.print(f"[blue]Differences detected: {changes_made}[/blue]")
 
+        if not changes_made:
+            console.print("[yellow]No differences found between release and develop branches. No update needed.[/yellow]")
+            return
+
+        # Create a pull request
+        console.print(f"[yellow]Creating pull request to merge {branch_name} into develop.[/yellow]")
+        prs_created = create_pull_request('develop', branch_name, "update")
+        if prs_created:
+            console.print(f"[green]Pull request created to merge {branch_name} into develop.[/green]")
+        else:
+            console.print(f"[red]Failed to create pull request. Please create it manually.[/red]")
+            console.print(f"[yellow]You can use the GitHub web interface to create a pull request from {branch_name} to develop.[/yellow]")
+
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+    finally:
         # Return to the original branch
         repo.git.checkout(original_branch)
         console.print(f"[green]Returned to {original_branch}[/green]")
@@ -822,10 +827,6 @@ def update(
                 except GitCommandError as e:
                     console.print(f"[red]Error reapplying stashed changes: {e}[/red]")
                     console.print("[yellow]Your changes are still in the stash. You may need to manually resolve conflicts.[/yellow]")
-
-    except GitCommandError as e:
-        console.print(f"[red]Error: {e}[/red]")
-
 
 #
 # List all branches
@@ -912,23 +913,22 @@ def checkout(branch: Optional[str] = typer.Argument(None, help="The branch to sw
         console.print(f"[red]Error: {e}[/red]")
 
 
-
 #
 # Delete a branch
 #
 @app.command()
 def rm(
-    branch_name: Optional[str] = typer.Argument(None, help="The branch name to delete"),
-    force: bool = typer.Option(False, "-f", "--force", help="Force delete the branch, even if it's not fully merged or has open pull requests"),
-    all: bool = typer.Option(False, "-a", "--all", help="Delete both local and remote branches with the same name")
+    branch_name: Optional[str] = typer.Argument(None,                   help="The branch name to delete"),
+    force:       bool          = typer.Option  (False, "-f", "--force", help="Force delete the branch, even if it's not fully merged or has open pull requests"),
+    all:         bool          = typer.Option  (False, "-a", "--all",   help="Delete both local and remote branches with the same name")
 ):
     """
     Delete a branch using an interactive menu or by specifying the branch name.
 
     Parameters:
     - branch_name: The branch name to delete.
-    - force: Force delete the branch, even if it's not fully merged or has open pull requests.
-    - all: Delete both local and remote branches with the same name.
+    - force      : Force delete the branch, even if it's not fully merged or has open pull requests.
+    - all        : Delete both local and remote branches with the same name.
 
     Examples:
     - Delete a branch using a menu:
@@ -1061,17 +1061,17 @@ def rm(
 #
 @app.command()
 def add(
-    file_paths: List[str] = typer.Argument(..., help="The path(s) to the file(s) to add"),
-    all: bool = typer.Option(False, "--all", "-A", help="Add changes from all tracked and untracked files"),
-    force: bool = typer.Option(False, "--force", "-f", help="Allow adding otherwise ignored files")
+    file_paths: List[str] = typer.Argument(...,                    help="The path(s) to the file(s) to add"),
+    all:        bool      = typer.Option  (False, "-a", "--all",   help="Add changes from all tracked and untracked files"),
+    force:      bool      = typer.Option  (False, "-f", "--force", help="Allow adding otherwise ignored files")
 ):
     """
     Add file changes to the staging area.
 
     Parameters:
     - file_paths: The path(s) to the file(s) to add. If not specified, you can use the --all option to add all changes.
-    - all: Add changes from all tracked and untracked files.
-    - force: Allow adding otherwise ignored files.
+    - all       : Add changes from all tracked and untracked files.
+    - force     : Allow adding otherwise ignored files.
 
     Examples:
     - Add a single file:
@@ -1097,24 +1097,24 @@ def add(
         console.print(f"[red]Error: {e}[/red]")
 
 
-
-
 #
 # Commit changes
 #
 @app.command()
 def commit(
-    message: str = typer.Option(..., "-m", "--message", help="The commit message"),
-    body: Optional[str] = typer.Option(None, "--body", "-b", help="The commit message body"),
-    add_all: bool = typer.Option(False, "--all", "-a", help="Add all changes before committing")
+    message:     Optional[str] = typer.Option(None,  "-m", "--message",     help="The commit message"),
+    body:        Optional[str] = typer.Option(None,  "-b", "--body",        help="The commit message body"),
+    add_all:     bool          = typer.Option(False, "-a", "--all",         help="Add all changes before committing"),
+    interactive: bool          = typer.Option(False, "-i", "--interactive", help="Use interactive mode for commit message")
 ):
     """
     Commit the current changes with a specified message and optional body.
 
     Parameters:
-    - message: The commit message.
-    - body: The commit message body.
-    - add_all: Add all changes before committing.
+    - message    : The commit message.
+    - body       : The commit message body.
+    - add_all    : Add all changes before committing.
+    - interactive: Use interactive mode for commit message.
 
     Examples:
     - Commit the current changes:
@@ -1123,42 +1123,51 @@ def commit(
         ./gitflow.py commit -m "Updated gitflow script" -b "This includes changes to improve performance and readability."
     - Add all changes and commit:
         ./gitflow.py commit -m "Updated gitflow script" --all
+    - Use interactive mode:
+        ./gitflow.py commit -i
     """
     try:
-        if add_all:
-            repo.git.add('--all')
-            console.print("[green]Added all changes to the staging area[/green]")
+        # Check for unstaged changes
+        if repo.is_dirty(untracked_files=True):
+            if not add_all:
+                console.print("[yellow]You have unstaged changes.[/yellow]")
+                add_all = inquirer.confirm(message="Do you want to stage all changes?", default=True).execute()
+
+            if add_all:
+                repo.git.add('--all')
+                console.print("[green]Added all changes to the staging area[/green]")
+            else:
+                console.print("[yellow]Proceeding with only staged changes.[/yellow]")
 
         # Ensure there are changes to commit
-        if not repo.index.diff("HEAD"):
+        if not repo.index.diff("HEAD") and not repo.untracked_files:
             console.print("[yellow]No changes to commit.[/yellow]")
             return
 
-        # Prepare the commit message
-        commit_message = message
-        if body:
-            commit_message += "\n\n" + split_message_body(body)
+        # Interactive mode or prompt for message if not provided
+        if interactive or not message:
+            message = inquirer.text(message="Enter commit message:").execute()
+            body = inquirer.text(message="Enter commit body (optional, press enter to skip):", default="").execute()
 
-        repo.git.commit('-m', commit_message)
-        console.print(f"[green]Committed changes with message:\n{commit_message}[/green]")
+        # Prepare the commit message
+        full_commit_message = message
+        if body:
+            full_commit_message += "\n\n" + split_message_body(body)
+
+        # Show the full commit message and ask for confirmation
+        console.print(f"[blue]Full commit message:[/blue]\n{full_commit_message}")
+        confirm = inquirer.confirm(message="Do you want to proceed with this commit?", default=True).execute()
+
+        if not confirm:
+            console.print("[yellow]Commit aborted.[/yellow]")
+            return
+
+        # Perform the commit
+        repo.git.commit('-m', full_commit_message)
+        console.print(f"[green]Committed changes with message:[/green]\n{full_commit_message}")
+
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
-
-def split_message_body(body: str) -> str:
-    """Splits the commit message body at the 72nd character, avoiding word splits."""
-    lines = []
-    for paragraph in body.split('\n'):
-        while len(paragraph) > 72:
-            split_pos = paragraph.rfind(' ', 0, 72)
-            if split_pos == -1:
-                split_pos = 72
-            lines.append(paragraph[:split_pos])
-            paragraph = paragraph[split_pos:].strip()
-        lines.append(paragraph)
-    return '\n'.join(lines)
-
-
-
 
 
 #
@@ -1166,10 +1175,26 @@ def split_message_body(body: str) -> str:
 #
 @app.command()
 def push(
-    branch: Optional[str] = typer.Argument(None, help="The branch to push changes to"),
-    force: bool = typer.Option(False, "-f", "--force", help="Force push changes"),
-    create_pr: bool = typer.Option(False, "-p", "--pr", help="Create a pull request instead of pushing directly")
+    branch:    Optional[str] = typer.Argument(None,                   help="The branch to push changes to"),
+    force:     bool          = typer.Option  (False, "-f", "--force", help="Force push changes"),
+    create_pr: bool          = typer.Option  (False, "-p", "--pr",    help="Create a pull request instead of pushing directly")
 ):
+    """
+    Push the committed changes to the remote repository. If the branch is protected, create a pull request.
+
+    Parameters:
+    - branch   : The branch to push changes to. If not specified, the current branch will be used.
+    - force    : Force push the changes.
+    - create_pr: Create a pull request instead of pushing directly.
+
+    Examples:
+    - Push changes to the current branch:
+        ./gitflow.py push
+    - Force push changes to a specific branch:
+        ./gitflow.py push feature/new-feature -f
+    - Create a pull request instead of pushing:
+        ./gitflow.py push -p
+    """
     try:
         # Use the current branch if no branch is provided
         if branch is None:
@@ -1178,9 +1203,7 @@ def push(
         current_branch = repo.active_branch.name
 
         # Check for unstaged changes
-        changes_made = repo.is_dirty(untracked_files=True)
-
-        if changes_made:
+        if repo.is_dirty(untracked_files=True):
             console.print("[yellow]You have unstaged changes.[/yellow]")
             action = inquirer.select(
                 message="How would you like to proceed?",
@@ -1193,8 +1216,12 @@ def push(
 
             if action == "Commit changes":
                 commit_message = inquirer.text(message="Enter commit message:").execute()
+                commit_body = inquirer.text(message="Enter commit body (optional, press enter to skip):", default="").execute()
+                full_commit_message = commit_message
+                if commit_body:
+                    full_commit_message += "\n\n" + split_message_body(commit_body)
                 repo.git.add('.')
-                repo.git.commit('-m', commit_message)
+                repo.git.commit('-m', full_commit_message)
                 console.print("[green]Changes committed.[/green]")
             elif action == "Abort":
                 console.print("[yellow]Push aborted.[/yellow]")
@@ -1213,7 +1240,28 @@ def push(
             if ahead > 0:
                 console.print(f"[yellow]Your local branch is {ahead} commit(s) ahead of the remote branch.[/yellow]")
                 changes_made = True
-            elif not changes_made:
+            elif behind > 0:
+                console.print(f"[yellow]Your local branch is {behind} commit(s) behind the remote branch.[/yellow]")
+                if not force:
+                    action = inquirer.select(
+                        message="How would you like to proceed?",
+                        choices=[
+                            "Pull and rebase",
+                            "Force push",
+                            "Create pull request",
+                            "Abort"
+                        ]
+                    ).execute()
+                    if action == "Pull and rebase":
+                        repo.git.pull('--rebase', 'origin', branch)
+                    elif action == "Force push":
+                        force = True
+                    elif action == "Create pull request":
+                        create_pr = True
+                    else:
+                        console.print("[yellow]Push aborted.[/yellow]")
+                        return
+            else:
                 console.print("[yellow]Your local branch is up to date with the remote branch. No push needed.[/yellow]")
                 return
         except GitCommandError:
@@ -1222,12 +1270,22 @@ def push(
 
         if changes_made or create_pr:
             try:
-                if force:
-                    repo.git.push('origin', branch, '--force')
+                if create_pr:
+                    console.print(f"[yellow]Creating pull request to merge {current_branch} into {branch}.[/yellow]")
+                    result = subprocess.run(
+                        ["gh", "pr", "create", "--base", branch, "--head", current_branch,
+                         "--title", f"Merge {current_branch} into {branch}", 
+                         "--body", "Automated pull request from script"],
+                        capture_output=True, text=True, check=True
+                    )
+                    console.print(f"[green]Created pull request to merge {current_branch} into {branch}[/green]")
                 else:
-                    repo.git.push('origin', branch)
-                console.print(f"[green]Pushed changes to {branch}[/green]")
-            except GitCommandError as e:
+                    if force:
+                        repo.git.push('origin', branch, '--force')
+                    else:
+                        repo.git.push('origin', branch)
+                    console.print(f"[green]Pushed changes to {branch}[/green]")
+            except (GitCommandError, subprocess.CalledProcessError) as e:
                 if "protected branch" in str(e):
                     console.print(f"[yellow]Protected branch {branch} detected. Creating a new branch for pull request.[/yellow]")
                     # Create a new branch for the pull request
@@ -1235,7 +1293,6 @@ def push(
                     repo.git.checkout('-b', new_branch_name)
                     repo.git.push('origin', new_branch_name)
                     
-                    # Create pull request from the new branch
                     result = subprocess.run(
                         ["gh", "pr", "create", "--base", branch, "--head", new_branch_name,
                          "--title", f"Update {branch}", "--body", "Automated pull request from script"],
@@ -1248,14 +1305,12 @@ def push(
                     
                     # Switch back to the original branch
                     repo.git.checkout(current_branch)
-                elif "non-fast-forward" in str(e):
-                    # Handle non-fast-forward error (code for this part remains the same)
-                    pass
                 else:
-                    raise e
+                    console.print(f"[red]Error: {e}[/red]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
 
 #
 # Pull changes
@@ -1332,21 +1387,105 @@ def pull(
 
 
 #
+# Status
+#
+@app.command()
+def status():
+    """
+    Display a detailed status of the current Git repository.
+    """
+    console = Console()
+
+    try:
+        # Get current branch
+        current_branch = repo.active_branch.name
+
+        # Get commit information
+        last_commit = repo.head.commit
+        commit_message = last_commit.message.strip()
+        commit_author = last_commit.author.name
+        commit_date = last_commit.committed_datetime.strftime("%Y-%m-%d %H:%M:%S")
+
+        # Get status
+        status = repo.git.status(porcelain=True)
+        staged = [line for line in status.split('\n') if line.startswith(('A', 'M', 'R', 'D')) and len(line) > 1]
+        unstaged = [line for line in status.split('\n') if line.startswith('??') or (line.startswith(' ') and len(line) > 1)]
+
+        # Get ahead/behind info
+        try:
+            ahead_behind = repo.git.rev_list('--left-right', '--count', f'origin/{current_branch}...HEAD').split()
+            behind = int(ahead_behind[0])
+            ahead = int(ahead_behind[1])
+        except GitCommandError:
+            ahead, behind = 0, 0
+
+        # Create status table
+        status_table = Table(title="Git Status", box=box.ROUNDED)
+        status_table.add_column("Category", style="cyan")
+        status_table.add_column("Details", style="green")
+
+        status_table.add_row("Current Branch", current_branch)
+        status_table.add_row("Last Commit", f"{commit_message[:50]}..." if len(commit_message) > 50 else commit_message)
+        status_table.add_row("Commit Author", commit_author)
+        status_table.add_row("Commit Date", commit_date)
+        status_table.add_row("Ahead by", str(ahead))
+        status_table.add_row("Behind by", str(behind))
+
+        # Create changes table
+        changes_table = Table(title="Changes", box=box.ROUNDED)
+        changes_table.add_column("Status", style="cyan")
+        changes_table.add_column("File", style="green")
+
+        for change in staged:
+            changes_table.add_row("Staged", change[3:])
+        for change in unstaged:
+            changes_table.add_row("Unstaged", change[3:])
+
+        # Display information
+        console.print(Panel(status_table, title="Repository Overview", expand=False))
+        console.print(Panel(changes_table, title="File Changes", expand=False))
+
+        # Display remotes
+        remotes = repo.remotes
+        if remotes:
+            remotes_table = Table(title="Remotes", box=box.ROUNDED)
+            remotes_table.add_column("Name", style="cyan")
+            remotes_table.add_column("URL", style="green")
+            for remote in remotes:
+                remotes_table.add_row(remote.name, remote.url)
+            console.print(Panel(remotes_table, title="Remote Repositories", expand=False))
+
+        # Display branches
+        branches = repo.branches
+        if branches:
+            branches_table = Table(title="Branches", box=box.ROUNDED)
+            branches_table.add_column("Name", style="cyan")
+            branches_table.add_column("Last Commit", style="green")
+            for branch in branches:
+                last_commit = branch.commit.message.strip()
+                branches_table.add_row(branch.name, f"{last_commit[:50]}..." if len(last_commit) > 50 else last_commit)
+            console.print(Panel(branches_table, title="Local Branches", expand=False))
+
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        
+
+#
 # Compare
 #
 @app.command()
 def compare(
-    file_path: str = typer.Argument(..., help="The path to the file to compare"),
-    branch1: Optional[str] = typer.Argument(None, help="The first branch to compare"),
-    branch2: Optional[str] = typer.Argument(None, help="The second branch to compare")
+    file_path: str           = typer.Argument(...,  help="The path to the file to compare"),
+    branch1:   Optional[str] = typer.Argument(None, help="The first branch to compare"),
+    branch2:   Optional[str] = typer.Argument(None, help="The second branch to compare")
 ):
     """
     Compare the same file in two different branches.
 
     Parameters:
     - file_path: The path to the file to compare.
-    - branch1: The first branch to compare.
-    - branch2: The second branch to compare.
+    - branch1  : The first branch to compare.
+    - branch2  : The second branch to compare.
 
     Examples:
     - Compare a file interactively:
@@ -1374,27 +1513,30 @@ def compare(
         console.print(f"[red]Error: {e}[/red]")
 
 
-
 #
 # Cherry-pick a file from the current branch into a target branch
 #
 @app.command()
 def cp(
-    file_path    : str           = typer.Argument(...,           help="The path to the file to copy the latest commit for"),
-    target_branch: Optional[str] = typer.Argument(None,          help="The target branch to copy into"),
-    push         : bool          = typer.Option(True,  "--push", help="Push the changes to the remote repository after copying")
+    file_path:     str           = typer.Argument(...,                 help="The path to the file to copy the latest commit for"),
+    target_branch: Optional[str] = typer.Argument(None,                help="The target branch to copy into"),
+    push:          bool          = typer.Option  (True, "--push",      help="Push the changes to the remote repository after copying"),
+    create_pr:     bool          = typer.Option  (False, "-p", "--pr", help="Create a pull request instead of pushing directly")
 ):
     """
     Copy the latest commit of a specific file from the current branch into a target branch.
 
     Parameters:
-    - file_path: The path to the file to copy the latest commit for.
+    - file_path    : The path to the file to copy the latest commit for.
     - target_branch: The target branch to copy into.
-    - push: Push the changes to the remote repository after copying if the remote branch exists.
+    - push         : Push the changes to the remote repository after copying if the remote branch exists.
+    - create_pr    : Create a pull request instead of pushing directly.
 
     Examples:
     - Copy the latest commit of gitflow.py into a feature branch:
         ./gitflow.py cp gitflow.py feature/new-feature --push
+    - Copy and create a pull request:
+        ./gitflow.py cp gitflow.py main --pr
     """
     try:
         # Save the current branch
@@ -1451,19 +1593,50 @@ def cp(
                 console.print(f"[red]Cherry-pick resulted in conflicts. Please resolve them and run 'git cherry-pick --continue' or 'git cherry-pick --abort'.[/red]")
                 return
 
-            # Optionally push the changes if the --push flag is set and the remote branch exists
-            if push:
+            # Push changes or create a pull request
+            if push or create_pr:
                 try:
-                    remote_branches = [branch for branch in repo.git.branch('-r').split('\n') if 'origin/HEAD' not in branch]
-                    remote_branch_exists = any(f'origin/{target_branch}' in branch for branch in remote_branches)
-
-                    if remote_branch_exists:
+                    if create_pr:
+                        # Create a new branch for the pull request
+                        pr_branch_name = f"cp-{file_path.replace('/', '-')}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                        repo.git.checkout('-b', pr_branch_name)
+                        repo.git.push('origin', pr_branch_name)
+                        
+                        # Create pull request
+                        result = subprocess.run(
+                            ["gh", "pr", "create", "--base", target_branch, "--head", pr_branch_name,
+                             "--title", f"Copy changes for {file_path} into {target_branch}",
+                             "--body", f"Automated pull request to copy changes for {file_path} from {original_branch} into {target_branch}"],
+                            capture_output=True, text=True
+                        )
+                        if result.returncode != 0:
+                            console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                        else:
+                            console.print(f"[green]Created pull request to merge changes into {target_branch}[/green]")
+                    else:
                         repo.git.push('origin', target_branch)
                         console.print(f"[green]Pushed changes to {target_branch}[/green]")
-                    else:
-                        console.print(f"[yellow]Remote branch {target_branch} does not exist. Skipping push.[/yellow]")
                 except GitCommandError as e:
-                    console.print(f"[red]Error while pushing: {e}[/red]")
+                    if "protected branch" in str(e):
+                        console.print(f"[yellow]Protected branch {target_branch} detected. Creating a pull request instead.[/yellow]")
+                        # Create a new branch for the pull request
+                        pr_branch_name = f"cp-{file_path.replace('/', '-')}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                        repo.git.checkout('-b', pr_branch_name)
+                        repo.git.push('origin', pr_branch_name)
+                        
+                        # Create pull request
+                        result = subprocess.run(
+                            ["gh", "pr", "create", "--base", target_branch, "--head", pr_branch_name,
+                             "--title", f"Copy changes for {file_path} into {target_branch}",
+                             "--body", f"Automated pull request to copy changes for {file_path} from {original_branch} into {target_branch}"],
+                            capture_output=True, text=True
+                        )
+                        if result.returncode != 0:
+                            console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                        else:
+                            console.print(f"[green]Created pull request to merge changes into {target_branch}[/green]")
+                    else:
+                        console.print(f"[red]Error while pushing: {e}[/red]")
 
         # Return to the original branch
         repo.git.checkout(original_branch)
@@ -1471,6 +1644,7 @@ def cp(
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
 
 #
 # Command: Doc
