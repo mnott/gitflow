@@ -396,9 +396,10 @@ def start(
 @app.command()
 def finish(
     name: Optional[str] = typer.Option(None, "-n", "--name", help="Specify the feature, hotfix, or release name"),
-    branch_type: str = typer.Option("hotfix", "-t", "--type", help="Specify the branch type: hotfix, feature, or release"),
+    branch_type: str = typer.Option("hotfix", "-t", "--type", help="Specify the branch type: local, hotfix, feature, or release"),
     week: Optional[int] = typer.Option(None, "-w", "--week", help="Specify the calendar week"),
     message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message"),
+    body: Optional[str] = typer.Option(None, "--body", "-b", help="Specify a commit message body"),
     delete: bool = typer.Option(True, "-d", "--delete", help="Delete the feature, hotfix, or release branch after creating PRs")
 ):
     """
@@ -409,11 +410,15 @@ def finish(
     - branch_type: The type of branch to finish ('hotfix', feature, or 'release').
     - week: The calendar week for a weekly hotfix branch.
     - message: An optional commit message.
+    - body: An optional commit message body.
     - delete: Whether to delete the feature, hotfix, or release branch after creating PRs.
     """
     # Determine the branch name
     if name and branch_type != "release":
-        branch_name = f"{branch_type}/{name}"
+        if branch_type == "local":
+            branch_name = name
+        else:
+            branch_name = f"{branch_type}/{name}"
     else:
         if branch_type == "hotfix":
             week_number = get_week_number(week)
@@ -449,8 +454,10 @@ def finish(
 
             if action == "Commit changes":
                 commit_message = message or inquirer.text(message="Enter commit message:").execute()
+                commit_body = body or inquirer.text(message="Enter commit body (optional, press enter to skip):", default="").execute()
+                full_commit_message = commit_message + "\n\n" + split_message_body(commit_body) if commit_body else commit_message
                 repo.git.add('.')
-                repo.git.commit('-m', commit_message)
+                repo.git.commit('-m', full_commit_message)
                 console.print("[green]Changes committed.[/green]")
             elif action == "Stash changes":
                 repo.git.stash('save', f"Stashed changes before finishing {branch_type}")
@@ -461,9 +468,11 @@ def finish(
             # If "Continue without committing" is selected, we just proceed
         elif message:
             # If there are no unstaged changes but a message was provided, commit any staged changes
+            commit_body = body or inquirer.text(message="Enter commit body (optional, press enter to skip):", default="").execute()
+            full_commit_message = message + "\n\n" + split_message_body(commit_body) if commit_body else message
             if repo.index.diff("HEAD"):
-                repo.git.commit('-m', message)
-                console.print(f"[green]Committed changes with message: {message}[/green]")
+                repo.git.commit('-m', full_commit_message)
+                console.print(f"[green]Committed changes with message: {full_commit_message}[/green]")
             else:
                 console.print("[yellow]No changes to commit.[/yellow]")
 
@@ -569,6 +578,7 @@ def finish(
         if repo.active_branch.name != 'develop':
             repo.git.checkout('develop')
             console.print("[green]Returned to develop branch.[/green]")
+
 
 
 
@@ -1051,25 +1061,42 @@ def rm(
 #
 @app.command()
 def add(
-    file_paths: List[str] = typer.Argument(..., help="The path(s) to the file(s) to add")
+    file_paths: List[str] = typer.Argument(..., help="The path(s) to the file(s) to add"),
+    all: bool = typer.Option(False, "--all", "-A", help="Add changes from all tracked and untracked files"),
+    force: bool = typer.Option(False, "--force", "-f", help="Allow adding otherwise ignored files")
 ):
     """
     Add file changes to the staging area.
 
     Parameters:
-    - file_paths: The path(s) to the file(s) to add.
+    - file_paths: The path(s) to the file(s) to add. If not specified, you can use the --all option to add all changes.
+    - all: Add changes from all tracked and untracked files.
+    - force: Allow adding otherwise ignored files.
 
     Examples:
     - Add a single file:
         ./gitflow.py add gitflow.py
     - Add multiple files:
         ./gitflow.py add gitflow.py README.md
+    - Add all changes:
+        ./gitflow.py add --all
+    - Add a file that is ignored:
+        ./gitflow.py add --force ignored_file.txt
     """
     try:
-        repo.git.add(file_paths)
-        console.print(f"[green]Added {file_paths} to the staging area[/green]")
+        if all:
+            repo.git.add('--all')
+            console.print(f"[green]Added all changes to the staging area[/green]")
+        else:
+            if force:
+                repo.git.add(file_paths, force=True)
+            else:
+                repo.git.add(file_paths)
+            console.print(f"[green]Added {file_paths} to the staging area[/green]")
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
+
 
 
 #
@@ -1078,26 +1105,60 @@ def add(
 @app.command()
 def commit(
     message: str = typer.Option(..., "-m", "--message", help="The commit message"),
+    body: Optional[str] = typer.Option(None, "--body", "-b", help="The commit message body"),
+    add_all: bool = typer.Option(False, "--all", "-a", help="Add all changes before committing")
 ):
     """
-    Commit the current changes with a specified message.
+    Commit the current changes with a specified message and optional body.
 
     Parameters:
     - message: The commit message.
+    - body: The commit message body.
+    - add_all: Add all changes before committing.
 
     Examples:
     - Commit the current changes:
         ./gitflow.py commit -m "Updated gitflow script"
+    - Commit with a message and body:
+        ./gitflow.py commit -m "Updated gitflow script" -b "This includes changes to improve performance and readability."
+    - Add all changes and commit:
+        ./gitflow.py commit -m "Updated gitflow script" --all
     """
     try:
-        repo.git.add('.')
-        if repo.index.diff("HEAD"):
-            repo.git.commit('-m', message)
-            console.print(f"[green]Committed changes with message: {message}[/green]")
-        else:
-            console.print(f"[yellow]No changes to commit.[/yellow]")
+        if add_all:
+            repo.git.add('--all')
+            console.print("[green]Added all changes to the staging area[/green]")
+
+        # Ensure there are changes to commit
+        if not repo.index.diff("HEAD"):
+            console.print("[yellow]No changes to commit.[/yellow]")
+            return
+
+        # Prepare the commit message
+        commit_message = message
+        if body:
+            commit_message += "\n\n" + split_message_body(body)
+
+        repo.git.commit('-m', commit_message)
+        console.print(f"[green]Committed changes with message:\n{commit_message}[/green]")
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
+def split_message_body(body: str) -> str:
+    """Splits the commit message body at the 72nd character, avoiding word splits."""
+    lines = []
+    for paragraph in body.split('\n'):
+        while len(paragraph) > 72:
+            split_pos = paragraph.rfind(' ', 0, 72)
+            if split_pos == -1:
+                split_pos = 72
+            lines.append(paragraph[:split_pos])
+            paragraph = paragraph[split_pos:].strip()
+        lines.append(paragraph)
+    return '\n'.join(lines)
+
+
+
 
 
 #
