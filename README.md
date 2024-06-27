@@ -1,4 +1,4 @@
-# gitflow
+# gf
 
 # Gitflow: A Git Wrapper for Release and Branch Management
 
@@ -206,7 +206,6 @@ To pull changes for all remote branches that you have locally, run:
 ./gitflow.py pull -a
 ```
 
-
 ### Copy a File
 
 To copy the latest commit of a specific file from the current branch into a target branch, run:
@@ -220,7 +219,7 @@ To copy the latest commit of a specific file from the current branch into a targ
 To delete a branch using an interactive menu, run:
 
 ```bash
-./gitflow.py delete-branch
+./gitflow.py rm
 ```
 
 
