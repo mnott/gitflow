@@ -389,6 +389,7 @@ def start(
         console.print(f"[red]Error: {e}[/red]")
 
 
+
 @app.command()
 def finish(
     name: Optional[str] = typer.Option(None, "-n", "--name", help="Specify the feature, hotfix, or release name"),
@@ -407,6 +408,7 @@ def finish(
     - message: An optional commit message.
     - delete: Whether to delete the feature, hotfix, or release branch after creating PRs.
     """
+    # Determine the branch name
     if name and branch_type != "release":
         branch_name = f"{branch_type}/{name}"
     else:
@@ -429,21 +431,38 @@ def finish(
         # Ensure we're on the correct branch
         repo.git.checkout(branch_name)
 
-        # Add and commit changes if a message is provided
-        if message:
-            repo.git.add('.')
-            if repo.is_dirty(untracked_files=True):
+        # Check for unstaged changes
+        if repo.is_dirty(untracked_files=True):
+            console.print("[yellow]You have unstaged changes.[/yellow]")
+            action = inquirer.select(
+                message="How would you like to proceed?",
+                choices=[
+                    "Commit changes",
+                    "Stash changes",
+                    "Continue without committing",
+                    "Abort"
+                ]
+            ).execute()
+
+            if action == "Commit changes":
+                commit_message = message or inquirer.text(message="Enter commit message:").execute()
+                repo.git.add('.')
+                repo.git.commit('-m', commit_message)
+                console.print("[green]Changes committed.[/green]")
+            elif action == "Stash changes":
+                repo.git.stash('save', f"Stashed changes before finishing {branch_type}")
+                console.print("[green]Changes stashed.[/green]")
+            elif action == "Abort":
+                console.print("[yellow]Finish operation aborted.[/yellow]")
+                return
+            # If "Continue without committing" is selected, we just proceed
+        elif message:
+            # If there are no unstaged changes but a message was provided, commit any staged changes
+            if repo.index.diff("HEAD"):
                 repo.git.commit('-m', message)
+                console.print(f"[green]Committed changes with message: {message}[/green]")
             else:
-                console.print(f"[yellow]No changes to commit.[/yellow]")
-        else:
-            repo.git.add('.')
-            if repo.is_dirty(untracked_files=True):
-                default_message = f"Finish {branch_type}."
-                repo.git.commit('-m', default_message)
-                console.print(f"[green]Committed changes with default message: {default_message}[/green]")
-            else:
-                console.print(f"[yellow]No changes to commit.[/yellow]")
+                console.print("[yellow]No changes to commit.[/yellow]")
 
         # Push the branch to the remote
         try:
@@ -460,10 +479,13 @@ def finish(
 
         def has_differences(base_branch: str):
             try:
-                diff = repo.git.diff(f'origin/{base_branch}..{branch_name}')
+                repo.git.fetch('origin', base_branch)
+                merge_base = repo.git.merge_base(f'origin/{base_branch}', branch_name)
+                diff = repo.git.diff(f'{merge_base}..{branch_name}')
                 return bool(diff.strip())
-            except GitCommandError:
-                return False  # Assume no differences if we can't check
+            except GitCommandError as e:
+                console.print(f"[yellow]Warning: Error checking differences with {base_branch}: {e}[/yellow]")
+                return True  # Assume there are differences if we can't check
 
         if branch_type == "release":
             # Push the tag to the remote
@@ -473,27 +495,37 @@ def finish(
 
         # Create pull requests
         def create_pull_request(base_branch: str):
-            if has_differences(base_branch):
-                result = subprocess.run(
-                    ["gh", "pr", "create", "--base", base_branch, "--head", branch_name,
-                     "--title", f"Merge {branch_name} into {base_branch}", 
-                     "--body", f"Merge {branch_type} {branch_name} into {base_branch}"],
-                    capture_output=True, text=True
-                )
-                if result.returncode != 0:
-                    console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
-                else:
+            force_create = branch_type == "release"
+            if has_differences(base_branch) or force_create:
+                try:
+                    result = subprocess.run(
+                        ["gh", "pr", "create", "--base", base_branch, "--head", branch_name,
+                         "--title", f"Merge {branch_name} into {base_branch}", 
+                         "--body", f"Merge {branch_type} {branch_name} into {base_branch}"],
+                        capture_output=True, text=True, check=True
+                    )
                     console.print(f"[green]Created pull request to merge {branch_name} into {base_branch}[/green]")
-                return True
+                    return True
+                except subprocess.CalledProcessError as e:
+                    if "A pull request for branch" in e.stderr:
+                        console.print(f"[yellow]A pull request already exists for {branch_name} into {base_branch}[/yellow]")
+                        return True
+                    elif "No commits between" in e.stderr:
+                        console.print(f"[yellow]No commits between {branch_name} and {base_branch}. No pull request created.[/yellow]")
+                        return False
+                    else:
+                        console.print(f"[red]Error creating pull request: {e.stderr}[/red]")
+                        return False
             else:
                 console.print(f"[yellow]No differences found between {branch_name} and {base_branch}. Skipping pull request creation.[/yellow]")
                 return False
 
         if branch_type == "release" or branch_type == "hotfix":
-            prs_created |= create_pull_request("main")
-            prs_created |= create_pull_request("develop")
+            prs_created_main = create_pull_request("main")
+            prs_created_develop = create_pull_request("develop")
+            prs_created = prs_created_main or prs_created_develop
         else:  # feature
-            prs_created |= create_pull_request("develop")
+            prs_created = create_pull_request("develop")
 
         if prs_created:
             console.print(f"[yellow]Branch {branch_name} not deleted because pull requests were created.[/yellow]")
@@ -516,6 +548,17 @@ def finish(
             repo.git.checkout('develop')
             console.print("[green]Returned to develop branch.[/green]")
 
+        # If changes were stashed, ask if the user wants to pop them
+        if 'action' in locals() and action == "Stash changes":
+            pop_stash = inquirer.confirm(message="Do you want to pop the stashed changes?", default=True).execute()
+            if pop_stash:
+                try:
+                    repo.git.stash('pop')
+                    console.print("[green]Stashed changes reapplied.[/green]")
+                except GitCommandError as e:
+                    console.print(f"[red]Error reapplying stashed changes: {e}[/red]")
+                    console.print("[yellow]Your changes are still in the stash. You may need to manually resolve conflicts.[/yellow]")
+
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
     finally:
@@ -523,6 +566,8 @@ def finish(
         if repo.active_branch.name != 'develop':
             repo.git.checkout('develop')
             console.print("[green]Returned to develop branch.[/green]")
+
+
 
 
 
