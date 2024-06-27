@@ -310,17 +310,15 @@ def get_next_semver(increment: str, existing_tags: List[str]) -> str:
             return new_tag
 
 
-#
-# Start a branch
-#
+
 @app.command()
 def start(
-    name:        Optional[str] = typer.Option(None,     "-n", "--name",        help="Specify the feature, hotfix, release, or backup name"),
-    branch_type: str           = typer.Option("hotfix", "-t", "--type",        help="Specify the branch type: hotfix, feature, release, or backup"),
-    week:        Optional[int] = typer.Option(None,     "-w", "--week",        help="Specify the calendar week"),
-    increment:   str           = typer.Option("patch",  "-i", "--increment",   help="Specify the version increment type: major, minor, patch"),
-    message:     Optional[str] = typer.Option(None,     "-m", "--message",     help="Specify a commit message"),
-    skip_switch: bool          = typer.Option(False,    "-s", "--skip-switch", help="Skip switching to main or develop branch before creating the new branch")
+    name: Optional[str] = typer.Option(None, "-n", "--name", help="Specify the feature, hotfix, release, or backup name"),
+    branch_type: str = typer.Option("hotfix", "-t", "--type", help="Specify the branch type: hotfix, feature, release, or backup"),
+    week: Optional[int] = typer.Option(None, "-w", "--week", help="Specify the calendar week"),
+    increment: str = typer.Option("patch", "-i", "--increment", help="Specify the version increment type: major, minor, patch"),
+    message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message"),
+    skip_switch: bool = typer.Option(False, "-s", "--skip-switch", help="Skip switching to main or develop branch before creating the new branch")
 ):
     """
     Start a new feature, hotfix, or release branch.
@@ -335,20 +333,6 @@ def start(
     - increment  : The version increment type for release branches ('major', 'minor', or 'patch').
     - message    : An optional commit message.
     - skip_switch: Whether to skip switching to the main or develop branch before creating the new branch. True is assumed for -t backup.
-
-    Examples:
-    - Start a weekly update hotfix branch (e.g. for some minor weekly updates):
-        ./gitflow.py start
-    - Start a new hotfix branch:
-        ./gitflow.py start -t hotfix  -n "critical-bugfix" -m "Starting critical bugfix hotfix"
-    - Start a new feature branch:
-        ./gitflow.py start -t feature -n "new-feature"     -m "Starting new feature"
-    - Start a new release branch:
-        ./gitflow.py start -t release -m "Starting release" -i "patch"
-    - Start a new backup branch off the current branch (-s is assumed if -t is backup):
-        ./gitflow.py start -t backup -n "backup-branch" -m "Starting backup branch"
-
-    The name is optional for a release (and for a weekly hotfix branch); if not given, those values will be auto-generated.
     """
     version_tag = None
     existing_tags = [tag.name for tag in repo.tags]
@@ -397,30 +381,20 @@ def start(
                 console.print(f"[yellow]No changes to commit.[/yellow]")
 
         if branch_type == "release" and version_tag:
-            # Check if the tag already exists
-            existing_tags = [tag.name for tag in repo.tags]
-            if version_tag in existing_tags:
-                console.print(f"[yellow]Tag {version_tag} already exists, skipping tagging[/yellow]")
-            else:
-                # Tag the release branch
-                repo.git.tag('-a', version_tag, '-m', f"Release {name} {version_tag}")
-                repo.git.push('origin', version_tag)
-                console.print(f"[green]Tagged release branch with {version_tag}[/green]")
+            # Create the tag locally, but don't push it yet
+            repo.create_tag(version_tag, message=f"Release {version_tag}")
+            console.print(f"[green]Created local tag {version_tag}[/green]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
 
 
-#
-# Finish a branch
-#
 @app.command()
 def finish(
     name: Optional[str] = typer.Option(None, "-n", "--name", help="Specify the feature, hotfix, or release name"),
     branch_type: str = typer.Option("hotfix", "-t", "--type", help="Specify the branch type: hotfix, feature, or release"),
     week: Optional[int] = typer.Option(None, "-w", "--week", help="Specify the calendar week"),
     message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message"),
-    target_branch: Optional[str] = typer.Option("develop", "-tb", "--target-branch", help="Specify the branch to merge hotfix into"),
     delete: bool = typer.Option(True, "-d", "--delete", help="Delete the feature, hotfix, or release branch after creating PRs")
 ):
     """
@@ -431,7 +405,6 @@ def finish(
     - branch_type: The type of branch to finish ('hotfix', feature, or 'release').
     - week: The calendar week for a weekly hotfix branch.
     - message: An optional commit message.
-    - target_branch: The branch to merge hotfix into (default is 'develop').
     - delete: Whether to delete the feature, hotfix, or release branch after creating PRs.
     """
     if name and branch_type != "release":
@@ -451,6 +424,11 @@ def finish(
             return
 
     try:
+        original_branch = repo.active_branch.name
+        
+        # Ensure we're on the correct branch
+        repo.git.checkout(branch_name)
+
         # Add and commit changes if a message is provided
         if message:
             repo.git.add('.')
@@ -478,28 +456,73 @@ def finish(
             else:
                 raise e
 
+        prs_created = False
+
+        def has_differences(base_branch: str):
+            try:
+                diff = repo.git.diff(f'origin/{base_branch}..{branch_name}')
+                return bool(diff.strip())
+            except GitCommandError:
+                return False  # Assume no differences if we can't check
+
+        if branch_type == "release":
+            # Push the tag to the remote
+            tag_name = name if name else repo.git.describe('--tags', '--abbrev=0')
+            repo.git.push('origin', tag_name)
+            console.print(f"[green]Pushed tag {tag_name} to remote[/green]")
+
         # Create pull requests
         def create_pull_request(base_branch: str):
-            result = subprocess.run(
-                ["gh", "pr", "create", "--base", base_branch, "--head", branch_name,
-                 "--title", f"Merge {branch_name} into {base_branch}", "--body", "Automated pull request from script"],
-                capture_output=True, text=True
-            )
-            if result.returncode != 0:
-                console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+            if has_differences(base_branch):
+                result = subprocess.run(
+                    ["gh", "pr", "create", "--base", base_branch, "--head", branch_name,
+                     "--title", f"Merge {branch_name} into {base_branch}", 
+                     "--body", f"Merge {branch_type} {branch_name} into {base_branch}"],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                else:
+                    console.print(f"[green]Created pull request to merge {branch_name} into {base_branch}[/green]")
+                return True
             else:
-                console.print(f"[green]Created pull request to merge {branch_name} into {base_branch}[/green]")
+                console.print(f"[yellow]No differences found between {branch_name} and {base_branch}. Skipping pull request creation.[/yellow]")
+                return False
 
-        if branch_type == "hotfix" or branch_type == "release":
-            create_pull_request("main")
-        
-        create_pull_request(target_branch)
+        if branch_type == "release" or branch_type == "hotfix":
+            prs_created |= create_pull_request("main")
+            prs_created |= create_pull_request("develop")
+        else:  # feature
+            prs_created |= create_pull_request("develop")
 
-        if delete:
+        if prs_created:
             console.print(f"[yellow]Branch {branch_name} not deleted because pull requests were created.[/yellow]")
+        else:
+            console.print(f"[yellow]No pull requests were created as there were no differences to merge.[/yellow]")
+            if delete:
+                # Delete the branch locally and remotely
+                repo.git.checkout('develop')
+                repo.git.branch('-D', branch_name)
+                try:
+                    repo.git.push('origin', '--delete', branch_name)
+                    console.print(f"[green]Deleted branch {branch_name} locally and remotely.[/green]")
+                except GitCommandError:
+                    console.print(f"[yellow]Could not delete remote branch {branch_name}. It may not exist or you may not have permission.[/yellow]")
+            else:
+                console.print(f"[yellow]Branch {branch_name} was not deleted. Use -d option to delete when finishing.[/yellow]")
+
+        # Return to develop branch if we're not already on it
+        if repo.active_branch.name != 'develop':
+            repo.git.checkout('develop')
+            console.print("[green]Returned to develop branch.[/green]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+    finally:
+        # Ensure we return to the develop branch if something went wrong
+        if repo.active_branch.name != 'develop':
+            repo.git.checkout('develop')
+            console.print("[green]Returned to develop branch.[/green]")
 
 
 
