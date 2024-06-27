@@ -220,7 +220,7 @@ To copy the latest commit of a specific file from the current branch into a targ
 To delete a branch using an interactive menu, run:
 
 ```bash
-./gitflow.py delete-branch
+./gitflow.py delete
 ```
 
 
@@ -416,36 +416,23 @@ def start(
 #
 @app.command()
 def finish(
-    name:          Optional[str] = typer.Option(None,      "-n",  "--name",          help="Specify the feature, hotfix, or release name"),
-    branch_type:   str           = typer.Option("hotfix",  "-t",  "--type",          help="Specify the branch type: hotfix, feature, or release"),
-    week:          Optional[int] = typer.Option(None,      "-w",  "--week",          help="Specify the calendar week"),
-    message:       Optional[str] = typer.Option(None,      "-m",  "--message",       help="Specify a commit message"),
+    name: Optional[str] = typer.Option(None, "-n", "--name", help="Specify the feature, hotfix, or release name"),
+    branch_type: str = typer.Option("hotfix", "-t", "--type", help="Specify the branch type: hotfix, feature, or release"),
+    week: Optional[int] = typer.Option(None, "-w", "--week", help="Specify the calendar week"),
+    message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message"),
     target_branch: Optional[str] = typer.Option("develop", "-tb", "--target-branch", help="Specify the branch to merge hotfix into"),
-    delete:        bool          = typer.Option(True,      "-d",  "--delete",        help="Delete the feature, hotfix, or release branch after merging")
+    delete: bool = typer.Option(True, "-d", "--delete", help="Delete the feature, hotfix, or release branch after creating PRs")
 ):
     """
-    Finish the feature, hotfix, or release by merging into main and/or develop, then tagging the update.
+    Finish the feature, hotfix, or release by creating pull requests for main and/or develop.
 
     Parameters:
-    - name         : The name of the feature, hotfix, or release branch.
-    - branch_type  : The type of branch to finish ('hotfix', feature, or 'release').
-    - week         : The calendar week for a weekly hotfix branch.
-    - message      : An optional commit message.
+    - name: The name of the feature, hotfix, or release branch.
+    - branch_type: The type of branch to finish ('hotfix', feature, or 'release').
+    - week: The calendar week for a weekly hotfix branch.
+    - message: An optional commit message.
     - target_branch: The branch to merge hotfix into (default is 'develop').
-    - delete       : Whether to delete the feature, hotfix, or release branch after merging.
-
-    Examples:
-    - Finish a weekly update hotfix branch:
-        ./gitflow.py finish
-    - Finish a hotfix branch:
-        ./gitflow.py finish -t hotfix  -n "critical-bugfix" -m "Finishing critical bugfix hotfix"
-    - Finish a feature branch:
-        ./gitflow.py finish -t feature -n "new-feature"     -m "Finishing new feature"
-    - Finish a release branch:
-        ./gitflow.py finish -t release -n "v1.4.5"          -m "Finishing release."
-
-    You must always give the name of the feature, hotfix, or release branch to finish, except if you
-    are finishing a weekly hotfix branch in which case the name will be auto-generated.
+    - delete: Whether to delete the feature, hotfix, or release branch after creating PRs.
     """
     if name and branch_type != "release":
         branch_name = f"{branch_type}/{name}"
@@ -474,45 +461,46 @@ def finish(
         else:
             repo.git.add('.')
             if repo.is_dirty(untracked_files=True):
-                default_message = "Finish feature, hotfix, or release."
+                default_message = f"Finish {branch_type}."
                 repo.git.commit('-m', default_message)
                 console.print(f"[green]Committed changes with default message: {default_message}[/green]")
             else:
                 console.print(f"[yellow]No changes to commit.[/yellow]")
 
-        # Ensure the branch is checked out before merging
-        repo.git.checkout(branch_name)
+        # Push the branch to the remote
+        try:
+            repo.git.push('origin', branch_name)
+        except GitCommandError as e:
+            if "non-fast-forward" in str(e):
+                console.print(f"[yellow]Branch already exists on remote. Pulling changes and pushing again.[/yellow]")
+                repo.git.pull('origin', branch_name, '--rebase')
+                repo.git.push('origin', branch_name)
+            else:
+                raise e
+
+        # Create pull requests
+        def create_pull_request(base_branch: str):
+            result = subprocess.run(
+                ["gh", "pr", "create", "--base", base_branch, "--head", branch_name,
+                 "--title", f"Merge {branch_name} into {base_branch}", "--body", "Automated pull request from script"],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+            else:
+                console.print(f"[green]Created pull request to merge {branch_name} into {base_branch}[/green]")
 
         if branch_type == "hotfix" or branch_type == "release":
-            # Merge hotfix or release branch into main
-            repo.git.checkout('main')
-            repo.git.pull('origin', 'main')
-            repo.git.merge(branch_name, '--no-ff')
-            repo.git.push('origin', 'main')
+            create_pull_request("main")
+        
+        create_pull_request(target_branch)
 
-        # Determine the target branch for merging
-        merge_target_branch = 'develop'
-        if branch_type == "hotfix" and target_branch:
-            merge_target_branch = target_branch
-
-        # Merge feature, hotfix, or release branch into develop
-        repo.git.checkout(merge_target_branch)
-        repo.git.pull('origin', merge_target_branch)
-        repo.git.merge(branch_name, '--no-ff')
-        repo.git.push('origin', merge_target_branch)
-
-        console.print(f"[green]Merged {branch_name} into {'main and ' if branch_type in ['hotfix', 'release'] else ''}develop[/green]")
-
-        # Delete the feature, hotfix, or release branch if specified and if it exists remotely
         if delete:
-            repo.git.branch('-d', branch_name)
-            try:
-                repo.git.push('origin', '--delete', branch_name)
-                console.print(f"[green]Deleted branch {branch_name}[/green]")
-            except GitCommandError:
-                console.print(f"[yellow]Branch {branch_name} does not exist on the remote and cannot be deleted there[/yellow]")
+            console.print(f"[yellow]Branch {branch_name} not deleted because pull requests were created.[/yellow]")
+
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
 
 
 #
@@ -719,24 +707,28 @@ def checkout(branch: Optional[str] = typer.Argument(None, help="The branch to sw
 # Delete a branch
 #
 @app.command()
-def delete_branch(
+def delete(
     branch_name: Optional[str] = typer.Argument(None, help="The branch name to delete"),
-    force: bool = typer.Option(False, "-f", "--force", help="Force delete the branch if it is not fully merged")
+    force: bool = typer.Option(False, "-f", "--force", help="Force delete the branch, even if it's not fully merged or has open pull requests"),
+    cleanup: bool = typer.Option(False, "-c", "--cleanup", help="Cleanup both local and remote branches")
 ):
     """
     Delete a branch using an interactive menu or by specifying the branch name.
 
     Parameters:
     - branch_name: The branch name to delete.
-    - force: Force delete the branch if it is not fully merged.
+    - force: Force delete the branch, even if it's not fully merged or has open pull requests.
+    - cleanup: Cleanup both local and remote branches after merging.
 
     Examples:
     - Delete a branch using a menu:
-        ./gitflow.py delete-branch
+        ./gitflow.py delete
     - Delete a specific branch:
-        ./gitflow.py delete-branch feature/old-feature
-    - Force delete a specific branch:
-        ./gitflow.py delete-branch feature/old-feature -f
+        ./gitflow.py delete feature/old-feature
+    - Force delete a branch (local or remote):
+        ./gitflow.py delete feature/old-feature -f
+    - Cleanup a branch:
+        ./gitflow.py delete -c
     """
     # Update local and remote references
     repo.git.fetch('--all')
@@ -754,23 +746,53 @@ def delete_branch(
     elif "Remote: " in branch_name:
         branch_name = branch_name.replace("Remote: ", "")
 
+    def check_prs(branch_name: str):
+        result = subprocess.run(
+            ["gh", "pr", "list", "--head", branch_name, "--state", "open", "--json", "number"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            prs = result.stdout.strip()
+            return prs != "[]"
+        else:
+            console.print(f"[red]Error checking pull requests: {result.stderr}[/red]")
+            return True
+
     try:
         if branch_name in local_branches:
             try:
+                if cleanup:
+                    for base_branch in ['main', 'develop']:
+                        repo.git.checkout(base_branch)
+                        repo.git.pull('origin', base_branch)
+                        if repo.git.merge_base(branch_name, base_branch) != repo.git.rev_parse(branch_name):
+                            console.print(f"[red]Error: {branch_name} is not fully merged into {base_branch}.[/red]")
+                            return
+                    console.print(f"[green]Branch {branch_name} is fully merged into main and develop.[/green]")
+                
                 repo.git.branch('-d' if not force else '-D', branch_name)
                 console.print(f"[green]Deleted local branch {branch_name}[/green]")
             except GitCommandError as e:
                 console.print(f"[red]Error: {e}[/red]")
-        elif branch_name in remote_branches:
+
+        if branch_name in remote_branches:
             # Verify if the branch actually exists on the remote
             remote_branches_actual = [ref.name.replace('origin/', '') for ref in repo.remote().refs]
             if branch_name in remote_branches_actual:
-                repo.git.push('origin', '--delete', branch_name)
-                console.print(f"[green]Deleted remote branch {branch_name}[/green]")
+                has_open_prs = check_prs(branch_name)
+                if has_open_prs and not force:
+                    console.print(f"[yellow]There are open pull requests for the branch {branch_name}. Use -f to force delete the remote branch.[/yellow]")
+                else:
+                    if has_open_prs:
+                        console.print(f"[yellow]Warning: Deleting remote branch {branch_name} with open pull requests.[/yellow]")
+                    try:
+                        repo.git.push('origin', '--delete', branch_name)
+                        console.print(f"[green]Deleted remote branch {branch_name}[/green]")
+                    except GitCommandError as e:
+                        console.print(f"[red]Error deleting remote branch {branch_name}: {e}[/red]")
             else:
                 console.print(f"[red]Error: Remote branch {branch_name} does not exist[/red]")
-        else:
-            console.print(f"[red]Error: Invalid branch name format[/red]")
+
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
 
@@ -837,7 +859,7 @@ def push(
     branch: Optional[str] = typer.Argument(None, help="The branch to push changes to")
 ):
     """
-    Push the committed changes to the remote repository.
+    Push the committed changes to the remote repository. If the branch is protected, create a pull request.
 
     Parameters:
     - branch: The branch to push changes to. If not specified, the current branch will be used.
@@ -853,10 +875,30 @@ def push(
         if branch is None:
             branch = repo.active_branch.name
 
-        repo.git.push('origin', branch)
-        console.print(f"[green]Pushed changes to {branch}[/green]")
+        current_branch = repo.active_branch.name
+
+        try:
+            repo.git.push('origin', branch)
+            console.print(f"[green]Pushed changes to {branch}[/green]")
+        except GitCommandError as e:
+            if "protected branch" in str(e) and "pull request" in str(e):
+                console.print(f"[yellow]Protected branch {branch} detected. Creating pull request instead.[/yellow]")
+                # Create a pull request for the protected branch
+                result = subprocess.run(
+                    ["gh", "pr", "create", "--base", branch, "--head", current_branch,
+                     "--title", f"Merge changes from {current_branch} into {branch}", "--body", "Automated pull request from script"],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                else:
+                    console.print(f"[green]Created pull request to merge changes from {current_branch} into {branch}[/green]")
+            else:
+                raise e
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
+
 
 
 #
