@@ -744,9 +744,9 @@ def update(
     This command can be used to merge bug fixes from the release branch back into develop.
 
     Parameters:
-    - name: The name of the release branch.
+    - name   : The name of the release branch.
     - message: An optional commit message.
-    - body: An optional commit message body.
+    - body   : An optional commit message body.
 
     Examples:
     - Update the release branch:
@@ -843,6 +843,7 @@ def update(
                     console.print(f"[red]Error reapplying stashed changes: {e}[/red]")
                     console.print("[yellow]Your changes are still in the stash. You may need to manually resolve conflicts.[/yellow]")
 
+
 #
 # List all branches
 #
@@ -872,8 +873,8 @@ def ls():
 #
 @app.command()
 def checkout(
-    target: Optional[str] = typer.Argument(None, help="The branch to switch to, or file/directory to revert"),
-    force: bool = typer.Option(False, "-f", "--force", help="Force checkout, discarding local changes")
+    target: Optional[str] = typer.Argument(None,                   help="The branch to switch to, or file/directory to revert"),
+    force:  bool          = typer.Option  (False, "-f", "--force", help="Force checkout, discarding local changes")
 ):
     """
     Switch to a different branch or revert changes in files/directories.
@@ -906,10 +907,24 @@ def checkout(
 
         # Check if target is a branch
         if target in repo.branches or target.startswith("origin/"):
-            # Ensure working directory is clean before switching branches
+            # Check if there are uncommitted changes
             if repo.is_dirty(untracked_files=True) and not force:
-                console.print(f"[red]Error: Working directory is not clean. Use -f to force checkout and discard changes.[/red]")
-                return
+                action = inquirer.select(
+                    message="You have uncommitted changes. What would you like to do?",
+                    choices=[
+                        "Stash changes",
+                        "Continue without stashing",
+                        "Abort"
+                    ]
+                ).execute()
+
+                if action == "Stash changes":
+                    repo.git.stash('push')
+                    console.print("[green]Changes stashed.[/green]")
+                    stashed_changes = True
+                elif action == "Abort":
+                    console.print("[yellow]Operation aborted.[/yellow]")
+                    return
 
             # Switch to the branch
             try:
@@ -1103,7 +1118,7 @@ def mv(
     Parameters:
     - old_name: The current name of the branch to rename.
     - new_name: The new name for the branch.
-    - all: Rename both local and remote branches.
+    - all     : Rename both local and remote branches.
 
     Examples:
     - Rename a branch interactively:
@@ -1250,6 +1265,94 @@ def add(
             else:
                 repo.git.add(file_paths)
             console.print(f"[green]Added {file_paths} to the staging area[/green]")
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+#
+# Stash changes
+#
+@app.command()
+def stash(
+    push:    bool          = typer.Option(False, "-p", "--push",    help="Push a new stash"),
+    list:    bool          = typer.Option(False, "-l", "--list",    help="List all stashes"),
+    show:    Optional[str] = typer.Option(None,  "-s", "--show",    help="Show the changes in a stash"),
+    drop:    Optional[str] = typer.Option(None,  "-d", "--drop",    help="Drop a stash"),
+    clear:   bool          = typer.Option(False, "-c", "--clear",   help="Clear all stashes"),
+    message: Optional[str] = typer.Option(None,  "-m", "--message", help="Stash with a custom message")
+):
+    """
+    Stash changes in the working directory.
+
+    Examples:
+    - Stash changes               : ./gitflow.py stash
+    - Stash changes with a message: ./gitflow.py stash -m "Work in progress"
+    - List all stashes            : ./gitflow.py stash --list
+    - Show changes in a stash     : ./gitflow.py stash --show stash@{0}
+    - Drop a stash                : ./gitflow.py stash --drop stash@{0}
+    - Clear all stashes           : ./gitflow.py stash --clear
+    """
+    try:
+        if list:
+            stash_list = repo.git.stash('list')
+            if stash_list:
+                console.print("[blue]Stash list:[/blue]")
+                console.print(stash_list)
+            else:
+                console.print("[yellow]No stashes found.[/yellow]")
+        elif show:
+            stash_show = repo.git.stash('show', '-p', show)
+            console.print(f"[blue]Changes in {show}:[/blue]")
+            console.print(stash_show)
+        elif drop:
+            repo.git.stash('drop', drop)
+            console.print(f"[green]Dropped stash {drop}.[/green]")
+        elif clear:
+            repo.git.stash('clear')
+            console.print("[green]Cleared all stashes.[/green]")
+        else:  # push is the default action
+            if message:
+                repo.git.stash('push', '-m', message)
+                console.print(f"[green]Stashed changes with message: {message}[/green]")
+            else:
+                repo.git.stash('push')
+                console.print("[green]Stashed changes.[/green]")
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+#
+# Unstash
+#
+@app.command()
+def unstash(
+    apply:    bool          = typer.Option  (False, "-a", "--apply", help="Apply the stash without removing it from the stash list"),
+    stash_id: Optional[str] = typer.Argument(None,                   help="The stash to apply (e.g., stash@{0})")
+):
+    """
+    Apply and remove a stash (pop), or just apply it.
+
+    Examples:
+    - Pop the latest stash                      : ./gitflow.py unstash
+    - Apply the latest stash without removing it: ./gitflow.py unstash --apply
+    - Pop a specific stash                      : ./gitflow.py unstash stash@{0}
+    - Apply a specific stash without removing it: ./gitflow.py unstash --apply stash@{0}
+    """
+    try:
+        if apply:
+            if stash_id:
+                repo.git.stash('apply', stash_id)
+                console.print(f"[green]Applied stash {stash_id} without removing it.[/green]")
+            else:
+                repo.git.stash('apply')
+                console.print("[green]Applied the latest stash without removing it.[/green]")
+        else:
+            if stash_id:
+                repo.git.stash('pop', stash_id)
+                console.print(f"[green]Popped stash {stash_id}.[/green]")
+            else:
+                repo.git.stash('pop')
+                console.print("[green]Popped the latest stash.[/green]")
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
 
@@ -1780,11 +1883,31 @@ def pull(
     """
     try:
         original_branch = repo.active_branch.name
+        stashed_changes = False
 
         if all_branches:
             console.print("[blue]Pulling changes for all local branches...[/blue]")
             # Fetch all branches from the remote
             repo.git.fetch('--all')
+
+            # Check for uncommitted changes before starting
+            if repo.is_dirty(untracked_files=True):
+                action = inquirer.select(
+                    message="You have uncommitted changes. What would you like to do?",
+                    choices=[
+                        "Stash changes",
+                        "Continue without stashing",
+                        "Abort"
+                    ]
+                ).execute()
+
+                if action == "Stash changes":
+                    repo.git.stash('push')
+                    console.print("[green]Changes stashed.[/green]")
+                    stashed_changes = True
+                elif action == "Abort":
+                    console.print("[yellow]Operation aborted.[/yellow]")
+                    return
 
             # Loop through each local branch and pull updates if there are changes
             for branch in repo.branches:
@@ -1816,6 +1939,29 @@ def pull(
             # Pull changes for the current branch
             current_branch = repo.active_branch.name
             console.print(f"[blue]Pulling changes for the current branch {current_branch}...[/blue]")
+
+            if repo.is_dirty(untracked_files=True):
+                action = inquirer.select(
+                    message="You have uncommitted changes. What would you like to do?",
+                    choices=[
+                        "Stash changes",
+                        "Continue without stashing",
+                        "Abort"
+                    ]
+                ).execute()
+
+                if action == "Stash changes":
+                    stash_message = inquirer.text(message="Enter a stash message (optional):").execute()
+                    if stash_message:
+                        repo.git.stash('push', '-m', stash_message)
+                    else:
+                        repo.git.stash('push')
+                    console.print("[green]Changes stashed.[/green]")
+                    stashed_changes = True
+                elif action == "Abort":
+                    console.print("[yellow]Pull aborted.[/yellow]")
+                    return
+
             try:
                 result = subprocess.run(
                     ["git", "pull", "origin", current_branch],
@@ -1828,6 +1974,17 @@ def pull(
                     console.print(result.stderr)
             except subprocess.CalledProcessError as e:
                 console.print(f"[red]Error pulling changes for branch {current_branch}: {e}[/red]")
+
+        # After successful pull, ask if user wants to pop the stash
+        if stashed_changes:
+            pop_stash = inquirer.confirm(message="Do you want to pop the stashed changes?", default=True).execute()
+            if pop_stash:
+                try:
+                    repo.git.stash('pop')
+                    console.print("[green]Popped the stashed changes.[/green]")
+                except GitCommandError as e:
+                    console.print(f"[red]Error popping stash: {e}[/red]")
+                    console.print("[yellow]You may need to resolve conflicts manually.[/yellow]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
