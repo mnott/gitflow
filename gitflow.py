@@ -1185,6 +1185,54 @@ def commit(
 
 
 #
+# Fetch
+#
+@app.command()
+def fetch(
+    remote: Optional[str] = typer.Argument(None,                   help="The name of the remote to fetch from (default is 'origin')"),
+    prune:           bool = typer.Option  (False, "-p", "--prune", help="Prune deleted branches from the remote repository"),
+    all_remotes:     bool = typer.Option  (False, "-a", "--all",   help="Fetch changes from all remotes")
+):
+    """
+    Fetch changes from the remote repository.
+
+    Parameters:
+    - remote: The name of the remote to fetch from (default is 'origin').
+    - prune: Prune deleted branches from the remote repository.
+    - all_remotes: Fetch changes from all remotes.
+
+    Examples:
+    - Fetch changes from the default remote:
+        ./gitflow.py fetch
+    - Fetch changes from a specific remote:
+        ./gitflow.py fetch origin
+    - Prune deleted branches:
+        ./gitflow.py fetch -p
+    - Fetch changes from all remotes:
+        ./gitflow.py fetch -a
+    """
+    try:
+        if all_remotes:
+            console.print("[blue]Fetching changes from all remotes...[/blue]")
+            if prune:
+                repo.git.fetch('--all', '--prune')
+            else:
+                repo.git.fetch('--all')
+            console.print("[green]Fetched changes from all remotes.[/green]")
+        else:
+            remote_name = remote or 'origin'
+            console.print(f"[blue]Fetching changes from remote {remote_name}...[/blue]")
+            if prune:
+                repo.git.fetch('--prune', remote_name)
+            else:
+                repo.git.fetch(remote_name)
+            console.print(f"[green]Fetched changes from remote {remote_name}.[/green]")
+
+    except GitCommandError as e:
+        console.print(f"[red]Error fetching changes: {e}[/red]")
+
+
+#
 # Push changes
 #
 @app.command()
@@ -1406,79 +1454,64 @@ def pull(
 @app.command()
 def status():
     """
-    Display a detailed status of the current Git repository.
+    Display a concise status of the current Git repository in a single, comprehensive table.
     """
     console = Console()
 
     try:
+        # Create main status table
+        status_table = Table(title="Git Repository Status", box=box.HEAVY_EDGE)
+        status_table.add_column("Category", style="cyan", no_wrap=True)
+        status_table.add_column("Details", style="green")
+
         # Get current branch
         current_branch = repo.active_branch.name
+        status_table.add_row("Current Branch", current_branch)
 
         # Get commit information
         last_commit = repo.head.commit
         commit_message = last_commit.message.strip()
         commit_author = last_commit.author.name
         commit_date = last_commit.committed_datetime.strftime("%Y-%m-%d %H:%M:%S")
-
-        # Get status
-        status = repo.git.status(porcelain=True)
-        staged = [line for line in status.split('\n') if line.startswith(('A', 'M', 'R', 'D')) and len(line) > 1]
-        unstaged = [line for line in status.split('\n') if line.startswith('??') or (line.startswith(' ') and len(line) > 1)]
+        status_table.add_row("Last Commit", f"{commit_message[:50]}..." if len(commit_message) > 50 else commit_message)
+        status_table.add_row("Commit Author", commit_author)
+        status_table.add_row("Commit Date", commit_date)
 
         # Get ahead/behind info
         try:
             ahead_behind = repo.git.rev_list('--left-right', '--count', f'origin/{current_branch}...HEAD').split()
             behind = int(ahead_behind[0])
             ahead = int(ahead_behind[1])
+            status_table.add_row("Commits Ahead/Behind", f"Ahead by {ahead}, Behind by {behind}")
         except GitCommandError:
-            ahead, behind = 0, 0
+            status_table.add_row("Commits Ahead/Behind", "Unable to determine")
 
-        # Create status table
-        status_table = Table(title="Git Status", box=box.ROUNDED)
-        status_table.add_column("Category", style="cyan")
-        status_table.add_column("Details", style="green")
+        # Get status
+        status = repo.git.status(porcelain=True)
+        staged = [line for line in status.split('\n') if line.startswith(('A', 'M', 'R', 'D')) and len(line) > 1]
+        unstaged = [line for line in status.split('\n') if line.startswith('??') or (line.startswith(' ') and len(line) > 1)]
 
-        status_table.add_row("Current Branch", current_branch)
-        status_table.add_row("Last Commit", f"{commit_message[:50]}..." if len(commit_message) > 50 else commit_message)
-        status_table.add_row("Commit Author", commit_author)
-        status_table.add_row("Commit Date", commit_date)
-        status_table.add_row("Ahead by", str(ahead))
-        status_table.add_row("Behind by", str(behind))
+        # Add changes to table
+        if staged or unstaged:
+            changes = []
+            for change in staged:
+                changes.append(f"Staged: {change[3:]}")
+            for change in unstaged:
+                changes.append(f"Unstaged: {change[3:]}")
+            status_table.add_row("Changes", "\n".join(changes))
+        else:
+            status_table.add_row("Changes", "Working tree clean")
 
-        # Create changes table
-        changes_table = Table(title="Changes", box=box.ROUNDED)
-        changes_table.add_column("Status", style="cyan")
-        changes_table.add_column("File", style="green")
-
-        for change in staged:
-            changes_table.add_row("Staged", change[3:])
-        for change in unstaged:
-            changes_table.add_row("Unstaged", change[3:])
-
-        # Display information
-        console.print(Panel(status_table, title="Repository Overview", expand=False))
-        console.print(Panel(changes_table, title="File Changes", expand=False))
-
-        # Display remotes
+        # Add remotes to table
         remotes = repo.remotes
         if remotes:
-            remotes_table = Table(title="Remotes", box=box.ROUNDED)
-            remotes_table.add_column("Name", style="cyan")
-            remotes_table.add_column("URL", style="green")
+            remote_info = []
             for remote in remotes:
-                remotes_table.add_row(remote.name, remote.url)
-            console.print(Panel(remotes_table, title="Remote Repositories", expand=False))
+                remote_info.append(f"{remote.name}: {remote.url}")
+            status_table.add_row("Remotes", "\n".join(remote_info))
 
-        # Display branches
-        branches = repo.branches
-        if branches:
-            branches_table = Table(title="Branches", box=box.ROUNDED)
-            branches_table.add_column("Name", style="cyan")
-            branches_table.add_column("Last Commit", style="green")
-            for branch in branches:
-                last_commit = branch.commit.message.strip()
-                branches_table.add_row(branch.name, f"{last_commit[:50]}..." if len(last_commit) > 50 else last_commit)
-            console.print(Panel(branches_table, title="Local Branches", expand=False))
+        # Display the table
+        console.print(status_table)
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
