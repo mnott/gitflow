@@ -1088,6 +1088,131 @@ def rm(
 
 
 #
+# Rename a Branch
+#
+@app.command()
+def mv(
+    old_name: Optional[str] = typer.Argument(None, help="The current name of the branch"),
+    new_name: Optional[str] = typer.Argument(None, help="The new name for the branch"),
+    all: bool = typer.Option(False, "-a", "--all", help="Rename both local and remote branches")
+):
+    """
+    Rename a branch locally and/or remotely.
+
+    Parameters:
+    - old_name: The current name of the branch to rename.
+    - new_name: The new name for the branch.
+    - all: Rename both local and remote branches.
+
+    Examples:
+    - Rename a branch interactively:
+        ./gitflow.py mv
+    - Rename a specific branch:
+        ./gitflow.py mv old-feature-name new-feature-name
+    - Rename both local and remote branches:
+        ./gitflow.py mv old-feature-name new-feature-name -a
+    """
+    # Update local and remote references
+    repo.git.fetch('--all')
+    repo.git.remote('prune', 'origin')
+
+    local_branches = [head.name for head in repo.heads]
+    remote_branches = [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
+
+    if not old_name:
+        all_branches = [f"Local: {branch}" for branch in local_branches] + [f"Remote: {branch}" for branch in remote_branches]
+        old_name = inquirer.select(message="Select a branch to rename:", choices=all_branches).execute()
+
+        if "Local: " in old_name:
+            old_name = old_name.replace("Local: ", "")
+            rename_local = True
+            rename_remote = False
+        elif "Remote: " in old_name:
+            old_name = old_name.replace("Remote: ", "")
+            rename_local = False
+            rename_remote = True
+        else:
+            rename_local = True
+            rename_remote = all
+    else:
+        rename_local = True
+        rename_remote = all
+
+    if not new_name:
+        new_name = inquirer.text(message="Enter the new branch name:").execute()
+
+    if old_name in ['develop', 'main'] or new_name in ['develop', 'main']:
+        console.print("[red]Error: You cannot rename the develop or main branches.[/red]")
+        return
+
+    try:
+        # Check for unstaged changes
+        if repo.is_dirty(untracked_files=True):
+            console.print("[yellow]You have unstaged changes.[/yellow]")
+            action = inquirer.select(
+                message="How would you like to proceed?",
+                choices=[
+                    "Commit changes",
+                    "Continue without committing",
+                    "Abort"
+                ]
+            ).execute()
+
+            if action == "Commit changes":
+                commit_message = inquirer.text(message="Enter commit message:").execute()
+                commit_body = inquirer.text(message="Enter commit body (optional, press enter to skip):", default="").execute()
+                full_commit_message = commit_message
+                if commit_body:
+                    full_commit_message += "\n\n" + split_message_body(commit_body)
+                repo.git.add('.')
+                repo.git.commit('-m', full_commit_message)
+                console.print("[green]Changes committed.[/green]")
+            elif action == "Abort":
+                console.print("[yellow]Rename operation aborted.[/yellow]")
+                return
+            # If "Continue without committing" is selected, we just proceed
+
+        # Rename local branch
+        if rename_local and old_name in local_branches:
+            if old_name == repo.active_branch.name:
+                repo.git.branch('-m', new_name)
+            else:
+                repo.git.branch('-m', old_name, new_name)
+            console.print(f"[green]Renamed local branch from {old_name} to {new_name}[/green]")
+
+        # Rename remote branch
+        if rename_remote and old_name in remote_branches:
+            try:
+                repo.git.push('origin', f'{new_name}')
+                repo.git.push('origin', f':{old_name}')
+                console.print(f"[green]Renamed remote branch from {old_name} to {new_name}[/green]")
+            except GitCommandError as e:
+                if "protected branch" in str(e).lower():
+                    console.print(f"[yellow]Protected branch {old_name} detected. Creating a new branch for pull request.[/yellow]")
+                    pr_branch_name = f"rename-{old_name}-to-{new_name}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                    repo.git.checkout('-b', pr_branch_name)
+                    repo.git.push('origin', pr_branch_name)
+
+                    prs_created = create_pull_request(old_name, pr_branch_name, "rename")
+                    if prs_created:
+                        console.print(f"[green]Created pull request to rename {old_name} to {new_name}[/green]")
+                    else:
+                        console.print(f"[red]Failed to create pull request. Please create it manually.[/red]")
+
+                    # Switch back to the original branch
+                    repo.git.checkout(old_name)
+                else:
+                    console.print(f"[red]Error renaming remote branch: {e}[/red]")
+
+        # Update tracking for the local branch if both local and remote were renamed
+        if rename_local and rename_remote:
+            repo.git.branch(f'--set-upstream-to=origin/{new_name}', new_name)
+
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+#
 # Add files to Git
 #
 @app.command()
