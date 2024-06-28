@@ -1259,10 +1259,11 @@ def add(
 #
 @app.command()
 def commit(
-    message:     Optional[str] = typer.Option(None,  "-m", "--message",     help="The commit message"),
-    body:        Optional[str] = typer.Option(None,  "-b", "--body",        help="The commit message body"),
-    add_all:     bool          = typer.Option(False, "-a", "--all",         help="Add all changes before committing"),
-    interactive: bool          = typer.Option(False, "-i", "--interactive", help="Use interactive mode for commit message")
+    message:     Optional[str] = typer.Option  (None,  "-m", "--message",     help="The commit message"),
+    body:        Optional[str] = typer.Option  (None,  "-b", "--body",        help="The commit message body"),
+    add_all:     bool          = typer.Option  (False, "-a", "--all",         help="Add all changes before committing"),
+    interactive: bool          = typer.Option  (False, "-i", "--interactive", help="Use interactive mode for commit message"),
+    files:       List[str]     = typer.Argument(None,                         help="Files or directories to commit")
 ):
     """
     Commit the current changes with a specified message and optional body.
@@ -1272,6 +1273,7 @@ def commit(
     - body       : The commit message body.
     - add_all    : Add all changes before committing.
     - interactive: Use interactive mode for commit message.
+    - files      : Files or directories to commit.
 
     Examples:
     - Commit the current changes:
@@ -1280,16 +1282,22 @@ def commit(
         ./gitflow.py commit -m "Updated gitflow script" -b "This includes changes to improve performance and readability."
     - Add all changes and commit:
         ./gitflow.py commit -m "Updated gitflow script" --all
+    - Commit specific files:
+        ./gitflow.py commit -m "Updated gitflow script" README.md script.py
     - Use interactive mode:
         ./gitflow.py commit -i
     """
     try:
-        # Check for unstaged changes
-        if repo.is_dirty(untracked_files=True):
-            if not add_all:
-                console.print("[yellow]You have unstaged changes.[/yellow]")
-                add_all = inquirer.confirm(message="Do you want to stage all changes?", default=True).execute()
-
+        # Stage changes if files are specified
+        if files:
+            repo.git.add(files)
+            console.print(f"[green]Added specified files to the staging area: {', '.join(files)}[/green]")
+        elif add_all:
+            repo.git.add('--all')
+            console.print("[green]Added all changes to the staging area[/green]")
+        elif repo.is_dirty(untracked_files=True):
+            console.print("[yellow]You have unstaged changes.[/yellow]")
+            add_all = inquirer.confirm(message="Do you want to stage all changes?", default=True).execute()
             if add_all:
                 repo.git.add('--all')
                 console.print("[green]Added all changes to the staging area[/green]")
@@ -1325,6 +1333,7 @@ def commit(
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
 
 
 #
