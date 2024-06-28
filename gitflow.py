@@ -870,58 +870,75 @@ def ls():
 # Checkout a branch
 #
 @app.command()
-def checkout(branch: Optional[str] = typer.Argument(None, help="The branch to switch to")):
+def checkout(
+    target: Optional[str] = typer.Argument(None, help="The branch to switch to, or file/directory to revert"),
+    force: bool = typer.Option(False, "-f", "--force", help="Force checkout, discarding local changes")
+):
     """
-    Switch to a different branch using an interactive menu or directly if branch name is provided.
+    Switch to a different branch or revert changes in files/directories.
 
     Examples:
     - Switch to a different branch interactively:
         ./gitflow.py checkout
     - Switch to a specific branch:
         ./gitflow.py checkout develop
+    - Revert changes in a file:
+        ./gitflow.py checkout -- filename.txt
+    - Revert all changes in the current directory:
+        ./gitflow.py checkout .
+    - Force checkout to a branch, discarding local changes:
+        ./gitflow.py checkout develop -f
     """
     try:
-        # List branches
-        local_branches  = [f"Local : {head.name}" for head in repo.heads]
-        remote_branches = [f"Remote: {ref.name.replace('origin/', '')}" for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
-
-        if branch is None:
-            # Show menu if no branch is provided
+        if target is None:
+            # Interactive branch selection
+            local_branches = [f"Local : {head.name}" for head in repo.heads]
+            remote_branches = [f"Remote: {ref.name.replace('origin/', '')}" for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
             branches = local_branches + remote_branches
             selected = inquirer.select(message="Select a branch:", choices=branches).execute()
             branch_type, branch_name = selected.split(": ")
-        else:
-            # Check if branch is local or remote
-            if branch in [head.name for head in repo.heads]:
-                branch_type = "Local"
-                branch_name = branch
-            elif branch in [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs]:
-                branch_type = "Remote"
-                branch_name = branch
+            
+            if branch_type == "Remote":
+                target = f"origin/{branch_name}"
             else:
-                console.print(f"[red]Error: Branch '{branch}' not found[/red]")
+                target = branch_name
+
+        # Check if target is a branch
+        if target in repo.branches or target.startswith("origin/"):
+            # Ensure working directory is clean before switching branches
+            if repo.is_dirty(untracked_files=True) and not force:
+                console.print(f"[red]Error: Working directory is not clean. Use -f to force checkout and discard changes.[/red]")
                 return
 
-        # Detect local or remote branch
-        if branch_type == "Remote":
-            remote_branch = f"origin/{branch_name}"
+            # Switch to the branch
+            try:
+                if target.startswith("origin/"):
+                    # For remote branches, create a new local branch
+                    local_branch_name = target.split("/", 1)[1]
+                    if local_branch_name not in repo.branches:
+                        repo.git.checkout('-b', local_branch_name, target)
+                    else:
+                        repo.git.checkout(local_branch_name)
+                        repo.git.pull('origin', local_branch_name)
+                else:
+                    if force:
+                        repo.git.checkout(target, force=True)
+                    else:
+                        repo.git.checkout(target)
+                console.print(f"[green]Switched to branch {target.split('/')[-1]}[/green]")
+            except GitCommandError as e:
+                console.print(f"[red]Error: {e}[/red]")
         else:
-            remote_branch = None
-
-        # Ensure working directory is clean before switching
-        if repo.is_dirty(untracked_files=True):
-            console.print(f"[red]Error: Working directory is not clean. Please commit or stash your changes before switching branches.[/red]")
-            return
-
-        # Switch to the branch
-        try:
-            if remote_branch:
-                repo.git.checkout('-b', branch_name, remote_branch)
-            else:
-                repo.git.checkout(branch_name)
-            console.print(f"[green]Switched to branch {branch_name}[/green]")
-        except GitCommandError as e:
-            console.print(f"[red]Error: {e}[/red]")
+            # Revert changes in file or directory
+            try:
+                if target == '.':
+                    repo.git.checkout('.')
+                    console.print(f"[green]Reverted all changes in the current directory[/green]")
+                else:
+                    repo.git.checkout('--', target)
+                    console.print(f"[green]Reverted changes in {target}[/green]")
+            except GitCommandError as e:
+                console.print(f"[red]Error: {e}[/red]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -975,7 +992,7 @@ def rm(
         delete_remote = True
     else:
         delete_local = True
-        delete_remote = True
+        delete_remote = all
 
     if branch_name in ['develop', 'main']:
         console.print("[red]Error: You cannot delete the develop or main branches.[/red]")
