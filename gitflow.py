@@ -2131,13 +2131,6 @@ def cp(
         # Save the current branch
         original_branch = repo.active_branch.name
 
-        # Find the latest commit hash for the specific file
-        latest_commit = repo.git.log('-n', '1', '--pretty=format:%H', '--', file_path)
-
-        if not latest_commit:
-            console.print(f"[red]Error: No commits found for {file_path}[/red]")
-            return
-
         # Read the file content in the current branch
         try:
             with open(file_path, 'r') as source_file:
@@ -2167,20 +2160,15 @@ def cp(
         if current_branch_file_content == target_branch_file_content:
             console.print(f"[yellow]File {file_path} is identical in both branches. Skipping copy.[/yellow]")
         else:
-            # Cherry-pick the latest commit
-            try:
-                result = subprocess.run(["git", "cherry-pick", latest_commit], capture_output=True, text=True)
-                if result.returncode != 0:
-                    console.print(f"[red]Cherry-pick resulted in conflicts. Please resolve them and run 'git cherry-pick --continue' or 'git cherry-pick --abort'.[/red]")
-                    console.print(result.stderr)
-                    console.print("[yellow]To see the conflicts, run 'git status' and check the conflicted files.[/yellow]")
-                    return
-                else:
-                    console.print(f"[green]Copied the latest commit for {file_path} into {target_branch}[/green]")
+            # Write the content from the current branch into the target branch
+            with open(file_path, 'w') as target_file:
+                target_file.write(current_branch_file_content)
 
-            except subprocess.CalledProcessError as e:
-                console.print(f"[red]Cherry-pick resulted in conflicts. Please resolve them and run 'git cherry-pick --continue' or 'git cherry-pick --abort'.[/red]")
-                return
+            # Commit the change
+            repo.git.add(file_path)
+            commit_message = f"Copy latest changes for {file_path} from {original_branch} to {target_branch}"
+            repo.git.commit('-m', commit_message)
+            console.print(f"[green]Copied the latest changes for {file_path} into {target_branch}[/green]")
 
             # Push changes or create a pull request
             if push or create_pr:
@@ -2233,6 +2221,7 @@ def cp(
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
 
 
 #
