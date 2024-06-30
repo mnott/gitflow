@@ -334,6 +334,15 @@ def get_next_semver(increment: str, existing_tags: List[str]) -> str:
             return new_tag
 
 
+# Check whether we are online with the remote
+def check_network_connection():
+    try:
+        repo.git.ls_remote('--exit-code', '--quiet', 'origin')
+        return True
+    except GitCommandError:
+        return False
+
+
 # Check for Branch Differences
 def has_differences(base_branch: str, compare_branch: str):
     try:
@@ -419,6 +428,10 @@ def start(
     - message    : An optional commit message.
     - skip_switch: Whether to skip switching to the main or develop branch before creating the new branch. True is assumed for -t backup.
     """
+    offline_mode = not check_network_connection()
+    if offline_mode:
+        console.print("[yellow]Network is unavailable. Operating in offline mode.[/yellow]")
+
     version_tag = None
     existing_tags = [tag.name for tag in repo.tags]
     if name and branch_type != "release":
@@ -446,9 +459,13 @@ def start(
 
     try:
         if not skip_switch:
-            # Checkout base branch and pull the latest changes
+            # Checkout base branch
             repo.git.checkout(base_branch)
-            repo.git.pull('origin', base_branch)
+            if not offline_mode:
+                # Pull the latest changes if online
+                repo.git.pull('origin', base_branch)
+            else:
+                console.print(f"[yellow]Skipping pull from {base_branch} due to offline mode.[/yellow]")
 
         # Check if the branch already exists
         if branch_name in repo.branches:
@@ -472,6 +489,9 @@ def start(
             # Create the tag locally, but don't push it yet
             repo.create_tag(version_tag, message=f"Release {version_tag}")
             console.print(f"[green]Created local tag {version_tag}[/green]")
+
+        if offline_mode:
+            console.print("[yellow]Note: Branch created locally. Remember to push changes when back online.[/yellow]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -500,6 +520,10 @@ def finish(
     - body       : An optional commit message body.
     - delete     : Whether to delete the feature, hotfix, or release branch after creating PRs.
     """
+    offline_mode = not check_network_connection()
+    if offline_mode:
+        console.print("[yellow]Network is unavailable. Operating in offline mode.[/yellow]")
+    
     # Determine the branch name
     if name and branch_type != "release":
         if branch_type == "local":
@@ -564,36 +588,41 @@ def finish(
                 console.print("[yellow]No changes to commit.[/yellow]")
 
         # Push the branch to the remote
-        try:
-            repo.git.push('origin', branch_name)
-        except GitCommandError as e:
-            if "non-fast-forward" in str(e):
-                console.print(f"[yellow]Branch already exists on remote. Pulling changes and pushing again.[/yellow]")
-                repo.git.pull('origin', branch_name, '--rebase')
+        if not offline_mode:
+            try:
                 repo.git.push('origin', branch_name)
-            else:
-                raise e
-
-        prs_created = False
-
-        if branch_type == "release":
-            # Push the tag to the remote
-            tag_name = name if name else repo.git.describe('--tags', '--abbrev=0')
-            repo.git.push('origin', tag_name)
-            console.print(f"[green]Pushed tag {tag_name} to remote[/green]")
-
-        if branch_type == "release" or branch_type == "hotfix":
-            prs_created_main    = create_pull_request("main",    branch_name, branch_type)
-            prs_created_develop = create_pull_request("develop", branch_name, branch_type)
-            prs_created = prs_created_main or prs_created_develop
-        else:  # feature
-            prs_created = create_pull_request("develop", branch_name, branch_type)
-
-        if prs_created:
-            console.print(f"[yellow]Branch {branch_name} not deleted because pull requests were created.[/yellow]")
+            except GitCommandError as e:
+                if "non-fast-forward" in str(e):
+                    console.print(f"[yellow]Branch already exists on remote. Pulling changes and pushing again.[/yellow]")
+                    repo.git.pull('origin', branch_name, '--rebase')
+                    repo.git.push('origin', branch_name)
+                else:
+                    raise e
         else:
-            console.print(f"[yellow]No pull requests were created as there were no differences to merge.[/yellow]")
-            if delete:
+            console.print("[yellow]Skipping push to remote due to offline mode.[/yellow]")
+
+        if not offline_mode:
+            prs_created = False
+
+            if branch_type == "release":
+                # Push the tag to the remote
+                tag_name = name if name else repo.git.describe('--tags', '--abbrev=0')
+                repo.git.push('origin', tag_name)
+                console.print(f"[green]Pushed tag {tag_name} to remote[/green]")
+
+            if branch_type == "release" or branch_type == "hotfix":
+                prs_created_main    = create_pull_request("main",    branch_name, branch_type)
+                prs_created_develop = create_pull_request("develop", branch_name, branch_type)
+                prs_created = prs_created_main or prs_created_develop
+            else:  # feature
+                prs_created = create_pull_request("develop", branch_name, branch_type)
+
+            if prs_created:
+                console.print(f"[yellow]Branch {branch_name} not deleted because pull requests were created.[/yellow]")
+            else:
+                console.print(f"[yellow]No pull requests were created as there were no differences to merge.[/yellow]")
+
+            if delete and not prs_created:
                 # Delete the branch locally and remotely
                 repo.git.checkout('develop')
                 repo.git.branch('-D', branch_name)
@@ -602,8 +631,8 @@ def finish(
                     console.print(f"[green]Deleted branch {branch_name} locally and remotely.[/green]")
                 except GitCommandError:
                     console.print(f"[yellow]Could not delete remote branch {branch_name}. It may not exist or you may not have permission.[/yellow]")
-            else:
-                console.print(f"[yellow]Branch {branch_name} was not deleted. Use -d option to delete when finishing.[/yellow]")
+        else:
+            console.print(f"[yellow]Branch {branch_name} was not deleted. Remote operations skipped due to offline mode.[/yellow]")
 
         # Return to develop branch if we're not already on it
         if repo.active_branch.name != 'develop':
@@ -628,6 +657,9 @@ def finish(
         if repo.active_branch.name != 'develop':
             repo.git.checkout('develop')
             console.print("[green]Returned to develop branch.[/green]")
+
+    if offline_mode:
+        console.print("[yellow]Finish operation completed in offline mode. Remember to push changes and create pull requests when back online.[/yellow]")
 
 
 #
