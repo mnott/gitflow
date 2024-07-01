@@ -345,8 +345,23 @@ def check_network_connection():
 
 # Check for Branch Differences
 def has_differences(base_branch: str, compare_branch: str):
+    if not check_network_connection():
+        console.print("[yellow]Warning: No network connection. Unable to fetch latest changes.[/yellow]")
+        console.print("[yellow]Proceeding with local comparison.[/yellow]")
+        try:
+            # Use local refs for comparison
+            merge_base = repo.git.merge_base(base_branch, compare_branch)
+            diff = repo.git.diff(f'{merge_base}..{compare_branch}')
+            return bool(diff.strip())
+        except GitCommandError as e:
+            console.print(f"[yellow]Warning: Error checking local differences: {e}[/yellow]")
+            return True  # Assume there are differences if we can't check
+    
     try:
-        repo.git.fetch('origin', base_branch)
+        # Use our custom fetch function to fetch the specific base branch
+        fetch(remote="origin", branch=base_branch, prune=False, all_remotes=False)
+        
+        # Now we can use the fetched remote branch
         merge_base = repo.git.merge_base(f'origin/{base_branch}', compare_branch)
         diff = repo.git.diff(f'{merge_base}..{compare_branch}')
         return bool(diff.strip())
@@ -428,8 +443,8 @@ def start(
     - message    : An optional commit message.
     - skip_switch: Whether to skip switching to the main or develop branch before creating the new branch. True is assumed for -t backup.
     """
-    offline_mode = not check_network_connection()
-    if offline_mode:
+    offline = not check_network_connection()
+    if offline:
         console.print("[yellow]Network is unavailable. Operating in offline mode.[/yellow]")
 
     version_tag = None
@@ -461,7 +476,7 @@ def start(
         if not skip_switch:
             # Checkout base branch
             repo.git.checkout(base_branch)
-            if not offline_mode:
+            if not offline:
                 # Pull the latest changes if online
                 repo.git.pull('origin', base_branch)
             else:
@@ -490,7 +505,7 @@ def start(
             repo.create_tag(version_tag, message=f"Release {version_tag}")
             console.print(f"[green]Created local tag {version_tag}[/green]")
 
-        if offline_mode:
+        if offline:
             console.print("[yellow]Note: Branch created locally. Remember to push changes when back online.[/yellow]")
 
     except GitCommandError as e:
@@ -520,8 +535,8 @@ def finish(
     - body       : An optional commit message body.
     - delete     : Whether to delete the feature, hotfix, or release branch after creating PRs.
     """
-    offline_mode = not check_network_connection()
-    if offline_mode:
+    offline = not check_network_connection()
+    if offline:
         console.print("[yellow]Network is unavailable. Operating in offline mode.[/yellow]")
     
     # Determine the branch name
@@ -588,7 +603,7 @@ def finish(
                 console.print("[yellow]No changes to commit.[/yellow]")
 
         # Push the branch to the remote
-        if not offline_mode:
+        if not offline:
             try:
                 repo.git.push('origin', branch_name)
             except GitCommandError as e:
@@ -601,7 +616,7 @@ def finish(
         else:
             console.print("[yellow]Skipping push to remote due to offline mode.[/yellow]")
 
-        if not offline_mode:
+        if not offline:
             prs_created = False
 
             if branch_type == "release":
@@ -658,7 +673,7 @@ def finish(
             repo.git.checkout('develop')
             console.print("[green]Returned to develop branch.[/green]")
 
-    if offline_mode:
+    if offline:
         console.print("[yellow]Finish operation completed in offline mode. Remember to push changes and create pull requests when back online.[/yellow]")
 
 
@@ -768,27 +783,17 @@ def weekly_update(
 def update(
     name:    Optional[str] = typer.Option(None, "-n", "--name",    help="Specify the release name"),
     message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message"),
-    body:    Optional[str] = typer.Option(None, "-b", "--body",    help="Specify a commit message body"),
-    offline: bool = typer.Option(False, "--offline", help="Perform update without network operations")
+    body:    Optional[str] = typer.Option(None, "-b", "--body",    help="Specify a commit message body")
 ):
     """
-    Update the release branch by merging it back into develop, creating pull requests if necessary.
-
-    This command can be used to merge bug fixes from the release branch back into develop.
-
-    Parameters:
-    - name   : The name of the release branch.
-    - message: An optional commit message.
-    - body   : An optional commit message body.
-
-    Examples:
-    - Update the release branch:
-        ./gitflow.py update -n "1.2.0" -m "Merging bug fixes from release 1.2.0"
+    Update a release branch and merge it back into the develop branch.
     """
     branch_name = f"release/{name}"
     network_available = check_network_connection()
+    
+    offline = not check_network_connection()
 
-    if not network_available and not offline:
+    if not offline:
         console.print("[yellow]Warning: No network connection detected.[/yellow]")
         offline = inquirer.confirm(message="Do you want to proceed in offline mode?", default=True).execute()
         if not offline:
@@ -839,36 +844,55 @@ def update(
 
         if not offline:
             try:
-                # Fetch the latest changes from the remote
-                repo.git.fetch('origin')
-                console.print("[blue]Fetched latest changes from remote[/blue]")
+                # Use the fetch function we constructed earlier
+                fetch(remote="origin", all_remotes=False, prune=False)
 
                 # Push the release branch to remote
                 repo.git.push('origin', branch_name)
                 console.print(f"[green]Pushed changes to remote {branch_name}[/green]")
-
-                # Check if there are differences between release and develop branches
-                changes_made = has_differences('develop', branch_name)
-                console.print(f"[blue]Differences detected: {changes_made}[/blue]")
-
-                if not changes_made:
-                    console.print("[yellow]No differences found between release and develop branches. No update needed.[/yellow]")
-                    return
-
-                # Create a pull request
-                console.print(f"[yellow]Creating pull request to merge {branch_name} into develop.[/yellow]")
-                prs_created = create_pull_request('develop', branch_name, "update")
-                if prs_created:
-                    console.print(f"[green]Pull request created to merge {branch_name} into develop.[/green]")
-                else:
-                    console.print(f"[red]Failed to create pull request. Please create it manually.[/red]")
-                    console.print(f"[yellow]You can use the GitHub web interface to create a pull request from {branch_name} to develop.[/yellow]")
             except GitCommandError as e:
                 console.print(f"[yellow]Warning: Unable to perform network operations. Error: {e}[/yellow]")
-                console.print("[yellow]Local changes have been made. Please sync and create pull request when online.[/yellow]")
+                console.print("[yellow]Proceeding with local merge.[/yellow]")
+
+        # Check if there are differences between release and develop branches
+        changes_made = has_differences('develop', branch_name)
+        console.print(f"[blue]Differences detected: {changes_made}[/blue]")
+
+        if not changes_made:
+            console.print("[yellow]No differences found between release and develop branches. No update needed.[/yellow]")
+            return
+
+        # Merge release branch into develop
+        console.print(f"[yellow]Merging {branch_name} into develop...[/yellow]")
+        repo.git.checkout('develop')
+        try:
+            repo.git.merge(branch_name, '--no-ff')
+            console.print(f"[green]Successfully merged {branch_name} into develop.[/green]")
+        except GitCommandError as e:
+            console.print(f"[red]Merge conflict occurred: {e}[/red]")
+            console.print("[yellow]Please resolve conflicts manually, then commit the changes.[/yellow]")
+            return
+
+        if not offline:
+            try:
+                # Push develop branch to remote
+                repo.git.push('origin', 'develop')
+                console.print("[green]Pushed updated develop branch to remote.[/green]")
+
+                # Create a pull request (if applicable)
+                console.print(f"[yellow]Creating pull request to merge develop into main.[/yellow]")
+                prs_created = create_pull_request('main', 'develop', "update")
+                if prs_created:
+                    console.print(f"[green]Pull request created to merge develop into main.[/green]")
+                else:
+                    console.print(f"[red]Failed to create pull request. Please create it manually.[/red]")
+                    console.print(f"[yellow]You can use the GitHub web interface to create a pull request from develop to main.[/yellow]")
+            except GitCommandError as e:
+                console.print(f"[yellow]Warning: Unable to push or create pull request. Error: {e}[/yellow]")
+                console.print("[yellow]Local merge is complete. Please push changes and create pull request when online.[/yellow]")
         else:
-            console.print("[yellow]Operating in offline mode. Local changes have been made.[/yellow]")
-            console.print("[yellow]Please sync and create pull request when online.[/yellow]")
+            console.print("[yellow]Operating in offline mode. Local merge is complete.[/yellow]")
+            console.print("[yellow]Please push changes and create pull request when online.[/yellow]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -1501,15 +1525,17 @@ def commit(
 #
 @app.command()
 def fetch(
-    remote: Optional[str] = typer.Argument(None,                   help="The name of the remote to fetch from (default is 'origin')"),
-    prune:           bool = typer.Option  (False, "-p", "--prune", help="Prune deleted branches from the remote repository"),
-    all_remotes:     bool = typer.Option  (False, "-a", "--all",   help="Fetch changes from all remotes")
+    remote: Optional[str] = typer.Argument(None, help="The name of the remote to fetch from (default is 'origin')"),
+    branch: Optional[str] = typer.Option(None, "--branch", "-b", help="Specific branch to fetch"),
+    prune: bool = typer.Option(False, "-p", "--prune", help="Prune deleted branches from the remote repository"),
+    all_remotes: bool = typer.Option(False, "-a", "--all", help="Fetch changes from all remotes")
 ):
     """
     Fetch changes from the remote repository.
 
     Parameters:
     - remote: The name of the remote to fetch from (default is 'origin').
+    - branch: Specific branch to fetch.
     - prune: Prune deleted branches from the remote repository.
     - all_remotes: Fetch changes from all remotes.
 
@@ -1518,6 +1544,8 @@ def fetch(
         ./gitflow.py fetch
     - Fetch changes from a specific remote:
         ./gitflow.py fetch origin
+    - Fetch a specific branch:
+        ./gitflow.py fetch --branch main
     - Prune deleted branches:
         ./gitflow.py fetch -p
     - Fetch changes from all remotes:
@@ -1537,12 +1565,17 @@ def fetch(
             console.print("[green]Fetched changes from all remotes.[/green]")
         else:
             remote_name = remote or 'origin'
-            console.print(f"[blue]Fetching changes from remote {remote_name}...[/blue]")
-            if prune:
-                repo.git.fetch('--prune', remote_name)
+            if branch:
+                console.print(f"[blue]Fetching branch {branch} from remote {remote_name}...[/blue]")
+                repo.git.fetch(remote_name, branch)
+                console.print(f"[green]Fetched branch {branch} from remote {remote_name}.[/green]")
             else:
-                repo.git.fetch(remote_name)
-            console.print(f"[green]Fetched changes from remote {remote_name}.[/green]")
+                console.print(f"[blue]Fetching changes from remote {remote_name}...[/blue]")
+                if prune:
+                    repo.git.fetch('--prune', remote_name)
+                else:
+                    repo.git.fetch(remote_name)
+                console.print(f"[green]Fetched changes from remote {remote_name}.[/green]")
 
         # Ultimately, do an ls
         ls()
@@ -1837,82 +1870,94 @@ def push(
             elif action == "Abort":
                 console.print("[yellow]Push aborted.[/yellow]")
                 return
-            # If "Continue without committing" is selected, we just proceed
 
-        # Fetch the latest changes from the remote
-        repo.git.fetch('origin')
+        # Check network connection before fetching
+        if check_network_connection():
+            # Use our custom fetch function
+            fetch(remote="origin", all_remotes=False, prune=False)
 
-        # Check if there are differences between local and remote
-        try:
-            ahead_behind = repo.git.rev_list('--left-right', '--count', f'origin/{branch}...HEAD').split()
-            behind = int(ahead_behind[0])
-            ahead = int(ahead_behind[1])
+            # Check if there are differences between local and remote
+            try:
+                ahead_behind = repo.git.rev_list('--left-right', '--count', f'origin/{branch}...HEAD').split()
+                behind = int(ahead_behind[0])
+                ahead = int(ahead_behind[1])
 
-            if ahead > 0:
-                console.print(f"[yellow]Your local branch is {ahead} commit(s) ahead of the remote branch.[/yellow]")
+                if ahead > 0:
+                    console.print(f"[yellow]Your local branch is {ahead} commit(s) ahead of the remote branch.[/yellow]")
+                    changes_made = True
+                elif behind > 0:
+                    console.print(f"[yellow]Your local branch is {behind} commit(s) behind the remote branch.[/yellow]")
+                    if not force:
+                        action = inquirer.select(
+                            message="How would you like to proceed?",
+                            choices=[
+                                "Pull and rebase",
+                                "Force push",
+                                "Create pull request",
+                                "Abort"
+                            ]
+                        ).execute()
+                        if action == "Pull and rebase":
+                            repo.git.pull('--rebase', 'origin', branch)
+                        elif action == "Force push":
+                            force = True
+                        elif action == "Create pull request":
+                            create_pr = True
+                        else:
+                            console.print("[yellow]Push aborted.[/yellow]")
+                            return
+                else:
+                    console.print("[yellow]Your local branch is up to date with the remote branch. No push needed.[/yellow]")
+                    return
+            except GitCommandError:
+                # If the remote branch doesn't exist, consider it as having differences
                 changes_made = True
-            elif behind > 0:
-                console.print(f"[yellow]Your local branch is {behind} commit(s) behind the remote branch.[/yellow]")
-                if not force:
-                    action = inquirer.select(
-                        message="How would you like to proceed?",
-                        choices=[
-                            "Pull and rebase",
-                            "Force push",
-                            "Create pull request",
-                            "Abort"
-                        ]
-                    ).execute()
-                    if action == "Pull and rebase":
-                        repo.git.pull('--rebase', 'origin', branch)
-                    elif action == "Force push":
-                        force = True
-                    elif action == "Create pull request":
-                        create_pr = True
-                    else:
-                        console.print("[yellow]Push aborted.[/yellow]")
-                        return
-            else:
-                console.print("[yellow]Your local branch is up to date with the remote branch. No push needed.[/yellow]")
-                return
-        except GitCommandError:
-            # If the remote branch doesn't exist, consider it as having differences
+        else:
+            console.print("[yellow]No network connection. Proceeding with local push.[/yellow]")
             changes_made = True
 
         if changes_made or create_pr:
             try:
                 if create_pr:
-                    console.print(f"[yellow]Creating pull request to merge {current_branch} into {branch}.[/yellow]")
-                    result = subprocess.run(
-                        ["gh", "pr", "create", "--base", branch, "--head", current_branch,
-                         "--title", f"Merge {current_branch} into {branch}",
-                         "--body", "Automated pull request from script"],
-                        capture_output=True, text=True, check=True
-                    )
-                    console.print(f"[green]Created pull request to merge {current_branch} into {branch}[/green]")
-                else:
-                    if force:
-                        repo.git.push('origin', branch, '--force')
+                    if check_network_connection():
+                        console.print(f"[yellow]Creating pull request to merge {current_branch} into {branch}.[/yellow]")
+                        result = subprocess.run(
+                            ["gh", "pr", "create", "--base", branch, "--head", current_branch,
+                             "--title", f"Merge {current_branch} into {branch}",
+                             "--body", "Automated pull request from script"],
+                            capture_output=True, text=True, check=True
+                        )
+                        console.print(f"[green]Created pull request to merge {current_branch} into {branch}[/green]")
                     else:
-                        repo.git.push('origin', branch)
-                    console.print(f"[green]Pushed changes to {branch}[/green]")
+                        console.print("[yellow]No network connection. Unable to create pull request.[/yellow]")
+                else:
+                    if check_network_connection():
+                        if force:
+                            repo.git.push('origin', branch, '--force')
+                        else:
+                            repo.git.push('origin', branch)
+                        console.print(f"[green]Pushed changes to {branch}[/green]")
+                    else:
+                        console.print("[yellow]No network connection. Changes will be pushed when online.[/yellow]")
             except (GitCommandError, subprocess.CalledProcessError) as e:
                 if "protected branch" in str(e):
                     console.print(f"[yellow]Protected branch {branch} detected. Creating a new branch for pull request.[/yellow]")
                     # Create a new branch for the pull request
                     new_branch_name = f"update-{branch}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                     repo.git.checkout('-b', new_branch_name)
-                    repo.git.push('origin', new_branch_name)
-
-                    result = subprocess.run(
-                        ["gh", "pr", "create", "--base", branch, "--head", new_branch_name,
-                         "--title", f"Update {branch}", "--body", "Automated pull request from script"],
-                        capture_output=True, text=True
-                    )
-                    if result.returncode != 0:
-                        console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                    if check_network_connection():
+                        repo.git.push('origin', new_branch_name)
+                        result = subprocess.run(
+                            ["gh", "pr", "create", "--base", branch, "--head", new_branch_name,
+                             "--title", f"Update {branch}", "--body", "Automated pull request from script"],
+                            capture_output=True, text=True
+                        )
+                        if result.returncode != 0:
+                            console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                        else:
+                            console.print(f"[green]Created pull request to merge changes from {new_branch_name} into {branch}[/green]")
                     else:
-                        console.print(f"[green]Created pull request to merge changes from {new_branch_name} into {branch}[/green]")
+                        console.print("[yellow]No network connection. New branch created locally. Push and create PR when online.[/yellow]")
 
                     # Switch back to the original branch
                     repo.git.checkout(current_branch)
