@@ -695,9 +695,28 @@ def finish(
             ).execute()
 
             if action == "Commit changes":
-                commit_message = message or inquirer.text(message="Enter commit message:").execute()
-                commit_body = body or inquirer.text(message="Enter commit body (optional, press enter to skip):", default="").execute()
-                full_commit_message = commit_message + "\n\n" + split_message_body(commit_body) if commit_body else commit_message
+                api_key = get_api_key(save_if_missing=False)
+                if api_key:
+                    use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
+                    if use_ai:
+                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o")
+                        if generated_message:
+                            console.print("[green]AI-generated commit message:[/green]")
+                            console.print(generated_message)
+                            
+                            edit_message = inquirer.confirm(message="Do you want to edit this message?", default=True).execute()
+                            if edit_message:
+                                full_commit_message = edit_in_editor(generated_message)
+                            else:
+                                full_commit_message = generated_message
+                        else:
+                            console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
+                            full_commit_message = get_manual_commit_message(message, body)
+                    else:
+                        full_commit_message = get_manual_commit_message(message, body)
+                else:
+                    full_commit_message = get_manual_commit_message(message, body)
+
                 repo.git.add('.')
                 repo.git.commit('-m', full_commit_message)
                 console.print("[green]Changes committed.[/green]")
