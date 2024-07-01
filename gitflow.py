@@ -1758,6 +1758,190 @@ def commit(
         console.print(f"[red]Error: {e}[/red]")
 
 
+
+
+import zipfile
+import tempfile
+import requests
+import os
+from typing import Optional
+import configparser
+
+@app.command()
+def ai_commit(
+    start_commit: Optional[str] = typer.Argument(None, help="Starting commit hash. If not provided, uses the current state."),
+    end_commit: Optional[str] = typer.Argument(None, help="Ending commit hash. If not provided, uses HEAD."),
+    model: str = typer.Option("gpt-4o", help="AI model to use"),
+    commit: bool = typer.Option(False, "--commit", "-c", help="Automatically commit with the generated message")
+):
+    """
+    Generate a commit message using AI based on changes between two commits or the current state.
+
+    This command will:
+    1. Get the diff between two specified commits or the current state
+    2. Zip up the diff and changed files
+    3. Send to an AI model for analysis
+    4. Generate a commit message body
+    5. Optionally commit the changes with the generated message
+
+    Examples:
+    - Generate a commit message for current changes:
+        ./gitflow.py ai_commit
+    - Generate a commit message for changes between two commits:
+        ./gitflow.py ai_commit abc123 def456
+    - Generate and automatically commit current changes:
+        ./gitflow.py ai_commit --commit
+    """
+    try:
+        # Get the API key from .git/config
+        config_path = os.path.join(repo.git_dir, 'config')
+        config = configparser.ConfigParser()
+        config.read(config_path)
+
+        try:
+            api_key = subprocess.check_output(["git", "config", "--get", "openai.apikey"], universal_newlines=True).strip()
+        except subprocess.CalledProcessError:
+            console.print("[yellow]OpenAI API key not found in git config.[/yellow]")
+            api_key = inquirer.secret(message="Enter your OpenAI API key:").execute()
+            
+            # Save the API key
+            try:
+                subprocess.run(["git", "config", "--local", "openai.apikey", api_key], check=True)
+                console.print("[green]OpenAI API key saved successfully.[/green]")
+            except subprocess.CalledProcessError as e:
+                console.print(f"[red]Failed to save OpenAI API key: {e}[/red]")
+                raise typer.Exit()
+        
+        # Determine the diff based on provided commits
+        if start_commit and end_commit:
+            diff = repo.git.diff(start_commit, end_commit)
+            changed_files = repo.git.diff('--name-only', start_commit, end_commit).split('\n')
+        elif start_commit:
+            diff = repo.git.diff(start_commit)
+            changed_files = repo.git.diff('--name-only', start_commit).split('\n')
+        else:
+            # Get diff of unstaged changes
+            unstaged_diff = repo.git.diff()
+            # Get diff of staged changes
+            staged_diff = repo.git.diff('--cached')
+            # Combine unstaged and staged diffs
+            diff = unstaged_diff + "\n" + staged_diff
+            # Get both unstaged and staged changed files
+            changed_files = repo.git.status('--porcelain').split('\n')
+            changed_files = [line.split()[-1] for line in changed_files if line]
+
+        # Create a temporary directory
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a zip file
+            zip_path = os.path.join(tmpdir, 'changes.zip')
+            with zipfile.ZipFile(zip_path, 'w') as zipf:
+                # Add diff file
+                diff_path = os.path.join(tmpdir, 'diff.txt')
+                with open(diff_path, 'w') as f:
+                    f.write(diff)
+                zipf.write(diff_path, 'diff.txt')
+
+                # Add changed files
+                for file in changed_files:
+                    if file and os.path.exists(file):
+                        zipf.write(file)
+
+            # Read the zip file
+            with open(zip_path, 'rb') as f:
+                zip_content = f.read()
+
+            # Prepare the API request
+            url = "https://api.openai.com/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            data = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a helpful assistant that generates meaningful commit messages."},
+                    {"role": "user", "content": """
+Generate a concise and meaningful commit message body for the following code changes. Follow these guidelines:
+
+1. Start with a brief summary (2-3 bullet points) of the high-level changes and intentions.
+
+2. Then, describe the changes in more detail, grouped by file or related functionality.
+
+3. Format:
+   - Use plain text only. No markup language or formatting (except as noted below).
+   - Limit each line to a maximum of 70 characters.
+   - Use bullet points (- ) for lists.
+   - Separate sections with a blank line.
+   - Do not use asterics (*) for headlines or emphasis.
+
+4. Code references:
+   - Minimize code blocks. Only use them for critical, short snippets.
+   - When necessary, place code on its own line, indented by 2 spaces.
+   - For function or class names, use single backticks (e.g., `function_name`).
+
+5. Focus on conveying the meaning and impact of the changes, not just listing them.
+
+6. If changes span multiple branches, organize the description by branch.
+
+7. Aim for a comprehensive yet concise message. Don't omit important details, but also avoid unnecessary verbosity.
+
+Remember, the goal is to create a clear, informative commit message that future developers
+(including yourself) will find helpful when reviewing the project history.
+                    """},
+                    {"role": "user", "content": f"Changes: {diff[:10000]}..."}  # Truncated for API limits
+                ]
+            }
+
+            # Make the API request
+            response = requests.post(url, headers=headers, json=data)
+            response.raise_for_status()
+
+            # Extract the generated message
+            generated_message = response.json()['choices'][0]['message']['content']
+
+            # Display the generated message
+            console.print("[green]Generated commit message:[/green]")
+            console.print(generated_message)
+
+            # Ask if the user wants to edit the message
+        edit_message = inquirer.confirm(message="Do you want to edit this message?", default=True).execute()
+
+        if edit_message:
+            # Create a temporary file with the generated message
+            with tempfile.NamedTemporaryFile(mode='w+', suffix=".tmp") as temp_file:
+                temp_file.write(generated_message)
+                temp_file.flush()
+
+                # Open the default text editor
+                editor = os.environ.get('EDITOR', 'vim')  # Default to vim if EDITOR is not set
+                subprocess.call([editor, temp_file.name])
+
+                # Read the edited message
+                temp_file.seek(0)
+                edited_message = temp_file.read().strip()
+
+            # Use the edited message
+            final_message = edited_message
+        else:
+            final_message = generated_message
+
+        # Ask if the user wants to commit with this message
+        if commit or inquirer.confirm(message="Do you want to commit with this message?", default=False).execute():
+            # Only commit if we're working with the current state
+            if not start_commit and not end_commit:
+                repo.git.add('.')
+                repo.git.commit('-m', final_message)
+                console.print("[green]Changes committed with the message.[/green]")
+            else:
+                console.print("[yellow]Commit option is only available when working with current changes.[/yellow]")
+        else:
+            console.print("[yellow]Commit aborted. You can use the generated message manually if desired.[/yellow]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+
 #
 # Fetch
 #
