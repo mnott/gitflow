@@ -1982,6 +1982,8 @@ Generate a concise and meaningful commit message body for the following code cha
 
 8. Remember, no line is to exceed 70 characters in length.
 
+9. Really remember, no line is to exceed 70 characters in length. Do an extra check for this.
+
 Remember, the goal is to create a clear, informative commit message that future developers
 (including yourself) will find helpful when reviewing the project history.
                     """},
