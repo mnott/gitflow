@@ -257,6 +257,12 @@ from git import Repo, GitCommandError
 from typing import Optional, List
 from InquirerPy import inquirer
 
+import zipfile
+import tempfile
+import requests
+import os
+import configparser
+
 pretty.install()
 traceback.install()
 console = Console()
@@ -415,6 +421,57 @@ def split_message_body(body: str) -> str:
             paragraph = paragraph[split_pos:].strip()
         lines.append(paragraph)
     return '\n'.join(lines)
+
+
+#
+# Helper Function to get the API Key
+#
+def get_api_key(save_if_missing=True):
+    try:
+        api_key = subprocess.check_output(["git", "config", "--get", "openai.apikey"], universal_newlines=True).strip()
+        return api_key
+    except subprocess.CalledProcessError:
+        if save_if_missing:
+            console.print("[yellow]OpenAI API key not found in git config.[/yellow]")
+            api_key = inquirer.secret(message="Enter your OpenAI API key:").execute()
+            
+            try:
+                subprocess.run(["git", "config", "--local", "openai.apikey", api_key], check=True)
+                console.print("[green]OpenAI API key saved successfully.[/green]")
+                return api_key
+            except subprocess.CalledProcessError as e:
+                console.print(f"[red]Failed to save OpenAI API key: {e}[/red]")
+                return None
+        else:
+            return None
+
+
+#
+# Configure the API Key
+#
+@app.command()
+def ai_config(
+    api_key: Optional[str] = typer.Option(None, "--api-key", help="Your OpenAI API key")
+):
+    """
+    Configure API Key
+    """
+    # Configure OpenAI API key
+    if api_key is None:
+        existing_api_key = get_api_key(save_if_missing=False)
+        if existing_api_key:
+            overwrite = inquirer.confirm(message="An API key already exists. Do you want to overwrite it?", default=False).execute()
+            if not overwrite:
+                console.print("[yellow]Keeping existing API key.[/yellow]")
+                return
+        api_key = inquirer.secret(message="Enter your OpenAI API key:").execute()
+
+    try:
+        subprocess.run(["git", "config", "--local", "openai.apikey", api_key], check=True)
+        console.print("[green]OpenAI API key saved successfully.[/green]")
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Failed to save OpenAI API key: {e}[/red]")
+        raise typer.Exit()
 
 
 #
@@ -1732,15 +1789,27 @@ def commit(
             console.print("[yellow]No changes to commit.[/yellow]")
             return
 
-        # Interactive mode or prompt for message if not provided
-        if interactive or not message:
-            message = inquirer.text(message="Enter commit message:").execute()
-            body = inquirer.text(message="Enter commit body (optional, press enter to skip):", default="").execute()
-
-        # Prepare the commit message
-        full_commit_message = message
-        if body:
-            full_commit_message += "\n\n" + split_message_body(body)
+        api_key = get_api_key(save_if_missing=False)
+        if api_key and (interactive or not message):
+            use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
+            if use_ai:
+                generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o")
+                if generated_message:
+                    console.print("[green]AI-generated commit message:[/green]")
+                    console.print(generated_message)
+                    
+                    edit_message = inquirer.confirm(message="Do you want to edit this message?", default=True).execute()
+                    if edit_message:
+                        full_commit_message = edit_in_editor(generated_message)
+                    else:
+                        full_commit_message = generated_message
+                else:
+                    console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
+                    full_commit_message = get_manual_commit_message(message, body)
+            else:
+                full_commit_message = get_manual_commit_message(message, body)
+        else:
+            full_commit_message = get_manual_commit_message(message, body)
 
         # Show the full commit message and ask for confirmation
         console.print(f"[blue]Full commit message:[/blue]\n{full_commit_message}")
@@ -1758,21 +1827,26 @@ def commit(
         console.print(f"[red]Error: {e}[/red]")
 
 
+def get_manual_commit_message(message, body):
+    if not message:
+        message = inquirer.text(message="Enter commit message:").execute()
+    if not body:
+        body = inquirer.text(message="Enter commit body (optional, press enter to skip):", default="").execute()
 
+    full_commit_message = message
+    if body:
+        full_commit_message += "\n\n" + split_message_body(body)
 
-import zipfile
-import tempfile
-import requests
-import os
-from typing import Optional
-import configparser
+    return full_commit_message
 
+#
+# Explain Code Changes using AI
+#
 @app.command()
-def ai_commit(
+def explain(
     start_commit: Optional[str] = typer.Argument(None, help="Starting commit hash. If not provided, uses the current state."),
-    end_commit: Optional[str] = typer.Argument(None, help="Ending commit hash. If not provided, uses HEAD."),
-    model: str = typer.Option("gpt-4o", help="AI model to use"),
-    commit: bool = typer.Option(False, "--commit", "-c", help="Automatically commit with the generated message")
+    end_commit:   Optional[str] = typer.Argument(None, help="Ending commit hash. If not provided, uses HEAD."),
+    model:        str           = typer.Option  ("gpt-4o", help="AI model to use")
 ):
     """
     Generate a commit message using AI based on changes between two commits or the current state.
@@ -1793,24 +1867,10 @@ def ai_commit(
         ./gitflow.py ai_commit --commit
     """
     try:
-        # Get the API key from .git/config
-        config_path = os.path.join(repo.git_dir, 'config')
-        config = configparser.ConfigParser()
-        config.read(config_path)
-
-        try:
-            api_key = subprocess.check_output(["git", "config", "--get", "openai.apikey"], universal_newlines=True).strip()
-        except subprocess.CalledProcessError:
-            console.print("[yellow]OpenAI API key not found in git config.[/yellow]")
-            api_key = inquirer.secret(message="Enter your OpenAI API key:").execute()
-            
-            # Save the API key
-            try:
-                subprocess.run(["git", "config", "--local", "openai.apikey", api_key], check=True)
-                console.print("[green]OpenAI API key saved successfully.[/green]")
-            except subprocess.CalledProcessError as e:
-                console.print(f"[red]Failed to save OpenAI API key: {e}[/red]")
-                raise typer.Exit()
+        api_key = get_api_key()
+        if not api_key:
+            console.print("[red]Failed to get OpenAI API key. Cannot generate explanation.[/red]")
+            return None
         
         # Determine the diff based on provided commits
         if start_commit and end_commit:
@@ -1902,48 +1962,24 @@ Remember, the goal is to create a clear, informative commit message that future 
 
             # Extract the generated message
             generated_message = response.json()['choices'][0]['message']['content']
-
-            # Display the generated message
-            console.print("[green]Generated commit message:[/green]")
-            console.print(generated_message)
-
-            # Ask if the user wants to edit the message
-        edit_message = inquirer.confirm(message="Do you want to edit this message?", default=True).execute()
-
-        if edit_message:
-            # Create a temporary file with the generated message
-            with tempfile.NamedTemporaryFile(mode='w+', suffix=".tmp") as temp_file:
-                temp_file.write(generated_message)
-                temp_file.flush()
-
-                # Open the default text editor
-                editor = os.environ.get('EDITOR', 'vim')  # Default to vim if EDITOR is not set
-                subprocess.call([editor, temp_file.name])
-
-                # Read the edited message
-                temp_file.seek(0)
-                edited_message = temp_file.read().strip()
-
-            # Use the edited message
-            final_message = edited_message
-        else:
-            final_message = generated_message
-
-        # Ask if the user wants to commit with this message
-        if commit or inquirer.confirm(message="Do you want to commit with this message?", default=False).execute():
-            # Only commit if we're working with the current state
-            if not start_commit and not end_commit:
-                repo.git.add('.')
-                repo.git.commit('-m', final_message)
-                console.print("[green]Changes committed with the message.[/green]")
-            else:
-                console.print("[yellow]Commit option is only available when working with current changes.[/yellow]")
-        else:
-            console.print("[yellow]Commit aborted. You can use the generated message manually if desired.[/yellow]")
+            
+            return generated_message
 
     except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
+        console.print(f"[red]Error generating explanation: {e}[/red]")
+        return None
 
+
+def edit_in_editor(initial_message):
+    with tempfile.NamedTemporaryFile(mode='w+', suffix=".tmp") as temp_file:
+        temp_file.write(initial_message)
+        temp_file.flush()
+
+        editor = os.environ.get('EDITOR', 'vim')  # Default to vim if EDITOR is not set
+        subprocess.call([editor, temp_file.name])
+
+        temp_file.seek(0)
+        return temp_file.read().strip()
 
 
 #
