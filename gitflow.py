@@ -1863,6 +1863,8 @@ def ai_commit(
                     {"role": "user", "content": """
 Generate a concise and meaningful commit message body for the following code changes. Follow these guidelines:
 
+0. At the very beginning, write a concise headline that summarizes the changes. Use at a maximum 72 characters.
+
 1. Start with a brief summary (2-3 bullet points) of the high-level changes and intentions.
 
 2. Then, describe the changes in more detail, grouped by file or related functionality.
@@ -1884,6 +1886,8 @@ Generate a concise and meaningful commit message body for the following code cha
 6. If changes span multiple branches, organize the description by branch.
 
 7. Aim for a comprehensive yet concise message. Don't omit important details, but also avoid unnecessary verbosity.
+
+8. Remember, no line is to exceed 70 characters in length.
 
 Remember, the goal is to create a clear, informative commit message that future developers
 (including yourself) will find helpful when reviewing the project history.
