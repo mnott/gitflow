@@ -1757,9 +1757,6 @@ def fetch(
                     repo.git.fetch(remote_name)
                 console.print(f"[green]Fetched changes from remote {remote_name}.[/green]")
 
-        # Ultimately, do an ls
-        ls()
-
     except GitCommandError as e:
         console.print(f"[red]Error fetching changes: {e}[/red]")
 
