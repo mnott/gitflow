@@ -418,6 +418,65 @@ def split_message_body(body: str) -> str:
 
 
 #
+# Configure the Git Repository
+#
+@app.command()
+def config(
+    username: Optional[str] = typer.Option(None,                  "-u", "--username", help="Your GitHub username"),
+    token:    Optional[str] = typer.Option(None,                  "-t", "--token",    help="Your GitHub token"),
+    email:    Optional[str] = typer.Option(None,                  "-e", "--email",    help="Your email for git config"),
+    name:     Optional[str] = typer.Option(None,                  "-n", "--name",     help="Your name for git config"),
+    host:     Optional[str] = typer.Option("github.wdf.sap.corp", "-h", "--host",     help="GitHub host", show_default=True)
+):
+    """
+    Configure Git and GitHub settings.
+    
+    Prompts for username, token, email, name, and host if not provided via CLI options.
+    """
+    if username is None:
+        username = inquirer.text(message="Enter your GitHub username     :").execute()
+
+    if token is None:
+        token = inquirer.secret (message="Enter your GitHub token        :").execute()
+
+    if email is None:
+        email = inquirer.text   (message="Enter your email for git config:").execute()
+
+    if name is None:
+        name = inquirer.text    (message="Enter your name  for git config:").execute()
+
+    host     = inquirer.text    (message="Enter the GitHub host          :", default="github.wdf.sap.corp").execute()
+
+    # Configure Git settings
+    try:
+        subprocess.run(f"git config --global user.email {email}", shell=True, check=True)
+        subprocess.run(f"git config --global user.name {name}", shell=True, check=True)
+        console.print("[green]Git configuration updated successfully.[/green]")
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Failed to configure git: {e.stderr.decode()}[/red]")
+        raise typer.Exit()
+
+    # Configure Git credentials for the host
+    try:
+        subprocess.run(f"git credential approve <<< 'protocol=https\nhost={host}\nusername={username}\npassword={token}'", shell=True, check=True)
+        console.print("[green]Git credentials configured successfully.[/green]")
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Failed to configure git credentials: {e.stderr.decode()}[/red]")
+        raise typer.Exit()
+
+    # Attempt to authenticate with GitHub
+    auth_command = f"echo {token} | gh auth login -h {host} -p https --with-token"
+    try:
+        subprocess.run(auth_command, shell=True, check=True, capture_output=True)
+        console.print("[green]Successfully authenticated with GitHub.[/green]")
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Authentication failed: {e.stderr.decode()}[/red]")
+        raise typer.Exit()
+
+
+
+
+#
 # Start a new feature, hotfix, or release branch
 #
 @app.command()
@@ -1697,7 +1756,6 @@ def commit(
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
-
 
 
 #
