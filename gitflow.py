@@ -699,7 +699,7 @@ def finish(
                 if api_key:
                     use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
                     if use_ai:
-                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o")
+                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
                         if generated_message:
                             console.print("[green]AI-generated commit message:[/green]")
                             console.print(generated_message)
@@ -858,7 +858,7 @@ def weekly_update(
             if api_key:
                 use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
                 if use_ai:
-                    generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o")
+                    generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
                     if generated_message:
                         console.print("[green]AI-generated commit message:[/green]")
                         console.print(generated_message)
@@ -973,7 +973,7 @@ def update(
                 if api_key:
                     use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
                     if use_ai:
-                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o")
+                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
                         if generated_message:
                             console.print("[green]AI-generated commit message:[/green]")
                             console.print(generated_message)
@@ -1298,7 +1298,7 @@ def rm(
                     if api_key:
                         use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
                         if use_ai:
-                            generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o")
+                            generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
                             if generated_message:
                                 console.print("[green]AI-generated commit message:[/green]")
                                 console.print(generated_message)
@@ -1472,7 +1472,7 @@ def mv(
                 if api_key:
                     use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
                     if use_ai:
-                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o")
+                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
                         if generated_message:
                             console.print("[green]AI-generated commit message:[/green]")
                             console.print(generated_message)
@@ -1883,7 +1883,7 @@ def commit(
         if api_key and (interactive or not message):
             use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
             if use_ai:
-                generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o")
+                generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
                 if generated_message:
                     console.print("[green]AI-generated commit message:[/green]")
                     console.print(generated_message)
@@ -1936,7 +1936,8 @@ def get_manual_commit_message(message, body):
 def explain(
     start_commit: Optional[str] = typer.Argument(None, help="Starting commit hash. If not provided, uses the current state."),
     end_commit:   Optional[str] = typer.Argument(None, help="Ending commit hash. If not provided, uses HEAD."),
-    model:        str           = typer.Option  ("gpt-4o", help="AI model to use")
+    model:        str           = typer.Option  ("gpt-4o", help="AI model to use"),
+    as_command:   bool          = typer.Option(True, hidden=True)
 ):
     """
     Generate a commit message using AI based on changes between two commits or the current state.
@@ -2055,7 +2056,13 @@ Remember, the goal is to create a clear, informative commit message that future 
             # Extract the generated message
             generated_message = response.json()['choices'][0]['message']['content']
             
-            return generated_message
+            if as_command:
+                # Function was called as a command
+                console.print("[green]Explanation of the differences:[/green]")
+                console.print(generated_message)
+            else:
+                # Function was called programmatically
+                return generated_message
 
     except Exception as e:
         console.print(f"[red]Error generating explanation: {e}[/red]")
@@ -2195,7 +2202,7 @@ def merge(
                 if api_key:
                     use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
                     if use_ai:
-                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o")
+                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
                         if generated_message:
                             console.print("[green]AI-generated commit message:[/green]")
                             console.print(generated_message)
@@ -2433,7 +2440,7 @@ def push(
                 if api_key:
                     use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
                     if use_ai:
-                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o")
+                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
                         if generated_message:
                             console.print("[green]AI-generated commit message:[/green]")
                             console.print(generated_message)
