@@ -844,7 +844,7 @@ def update(
         if not offline:
             try:
                 # Use the fetch function we constructed earlier
-                fetch(remote="origin", all_remotes=False, prune=False)
+                fetch(remote="origin", branch=None, all_remotes=False, prune=False)
 
                 # Push the release branch to remote
                 repo.git.push('origin', branch_name)
@@ -2055,7 +2055,7 @@ def push(
 
         if not offline:
             # Use our custom fetch function
-            fetch(remote="origin", all_remotes=False, prune=False)
+            fetch(remote="origin", branch=None, all_remotes=False, prune=False)
 
             # Check if there are differences between local and remote
             try:
