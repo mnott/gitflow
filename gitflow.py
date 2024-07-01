@@ -789,8 +789,7 @@ def update(
     Update a release branch and merge it back into the develop branch.
     """
     branch_name = f"release/{name}"
-    network_available = check_network_connection()
-    
+
     offline = not check_network_connection()
 
     if not offline:
@@ -960,12 +959,19 @@ def checkout(
     - Force checkout to a branch, discarding local changes:
         ./gitflow.py checkout develop -f
     """
+    offline = not check_network_connection()
+
     try:
         if target is None:
             # Interactive branch selection
             local_branches = [f"Local : {head.name}" for head in repo.heads]
-            remote_branches = [f"Remote: {ref.name.replace('origin/', '')}" for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
-            branches = local_branches + remote_branches
+            if not offline:
+                remote_branches = [f"Remote: {ref.name.replace('origin/', '')}" for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
+                branches = local_branches + remote_branches
+            else:
+                branches = local_branches
+                console.print("[yellow]Offline mode: Only local branches are available.[/yellow]")
+            
             selected = inquirer.select(message="Select a branch:", choices=branches).execute()
             branch_type, branch_name = selected.split(": ")
             
@@ -975,7 +981,7 @@ def checkout(
                 target = branch_name
 
         # Check if target is a branch
-        if target in repo.branches or target.startswith("origin/"):
+        if target in repo.branches or (not offline and target.startswith("origin/")):
             # Check if there are uncommitted changes
             if repo.is_dirty(untracked_files=True) and not force:
                 action = inquirer.select(
@@ -990,21 +996,21 @@ def checkout(
                 if action == "Stash changes":
                     repo.git.stash('push')
                     console.print("[green]Changes stashed.[/green]")
-                    stashed_changes = True
                 elif action == "Abort":
                     console.print("[yellow]Operation aborted.[/yellow]")
                     return
 
             # Switch to the branch
             try:
-                if target.startswith("origin/"):
+                if not offline and target.startswith("origin/"):
                     # For remote branches, create a new local branch
                     local_branch_name = target.split("/", 1)[1]
                     if local_branch_name not in repo.branches:
                         repo.git.checkout('-b', local_branch_name, target)
                     else:
                         repo.git.checkout(local_branch_name)
-                        repo.git.pull('origin', local_branch_name)
+                        if not offline:
+                            repo.git.pull('origin', local_branch_name)
                 else:
                     if force:
                         repo.git.checkout(target, force=True)
@@ -1027,6 +1033,17 @@ def checkout(
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
+    # If changes were stashed, ask if the user wants to pop them
+    if 'action' in locals() and action == "Stash changes":
+        pop_stash = inquirer.confirm(message="Do you want to pop the stashed changes?", default=True).execute()
+        if pop_stash:
+            try:
+                repo.git.stash('pop')
+                console.print("[green]Stashed changes reapplied.[/green]")
+            except GitCommandError as e:
+                console.print(f"[red]Error reapplying stashed changes: {e}[/red]")
+                console.print("[yellow]Your changes are still in the stash. You may need to manually resolve conflicts.[/yellow]")
 
 
 #
@@ -1209,15 +1226,21 @@ def mv(
     - Rename both local and remote branches:
         ./gitflow.py mv old-feature-name new-feature-name -a
     """
-    # Update local and remote references
-    repo.git.fetch('--all')
-    repo.git.remote('prune', 'origin')
+    offline = not check_network_connection()
+
+    if not offline:
+        repo.git.fetch('--all')
+        repo.git.remote('prune', 'origin')
 
     local_branches = [head.name for head in repo.heads]
-    remote_branches = [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
+    remote_branches = []
+    if not offline:
+        remote_branches = [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
 
     if not old_name:
-        all_branches = [f"Local: {branch}" for branch in local_branches] + [f"Remote: {branch}" for branch in remote_branches]
+        all_branches = [f"Local: {branch}" for branch in local_branches]
+        if not offline:
+            all_branches += [f"Remote: {branch}" for branch in remote_branches]
         old_name = inquirer.select(message="Select a branch to rename:", choices=all_branches).execute()
 
         if "Local: " in old_name:
@@ -1227,13 +1250,13 @@ def mv(
         elif "Remote: " in old_name:
             old_name = old_name.replace("Remote: ", "")
             rename_local = False
-            rename_remote = True
+            rename_remote = not offline
         else:
             rename_local = True
-            rename_remote = all
+            rename_remote = all and not offline
     else:
         rename_local = True
-        rename_remote = all
+        rename_remote = all and not offline
 
     if not new_name:
         new_name = inquirer.text(message="Enter the new branch name:").execute()
@@ -1267,7 +1290,6 @@ def mv(
             elif action == "Abort":
                 console.print("[yellow]Rename operation aborted.[/yellow]")
                 return
-            # If "Continue without committing" is selected, we just proceed
 
         # Rename local branch
         if rename_local and old_name in local_branches:
@@ -1307,6 +1329,10 @@ def mv(
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
+    if offline:
+        console.print("[yellow]Operating in offline mode. Remote operations were skipped.[/yellow]")
+        console.print("[yellow]Please sync changes when online.[/yellow]")
 
 
 #
@@ -1350,28 +1376,158 @@ def add(
         console.print(f"[red]Error: {e}[/red]")
 
 
+@app.command()
+def stage(
+    all        : bool      = typer.Option  (False, "-a", "--all",         help="Stage all changes"),
+    interactive: bool      = typer.Option  (False, "-i", "--interactive", help="Use interactive mode for staging"),
+    files      : List[str] = typer.Argument(None,                         help="Files or directories to stage")
+):
+    """
+    Stage changes for the next commit.
+
+    Examples:
+    - Stage all changes          : ./gitflow.py stage --all
+    - Stage specific files       : ./gitflow.py stage file1.py file2.py
+    - Use interactive staging    : ./gitflow.py stage --interactive
+    """
+    try:
+        if all:
+            repo.git.add('--all')
+            console.print("[green]Staged all changes.[/green]")
+        elif interactive:
+            # Get only unstaged files
+            status = repo.git.status('--porcelain').splitlines()
+            unstaged = [s for s in status if s.startswith(' M') or s.startswith('??')]
+            
+            if not unstaged:
+                console.print("[yellow]No unstaged changes to stage.[/yellow]")
+                return
+
+            choices = [f"{s[:2]} {s[3:]}" for s in unstaged]
+            selected = inquirer.checkbox(
+                message="Select files to stage:",
+                choices=choices
+            ).execute()
+
+            if selected:
+                for item in selected:
+                    file = item[3:]  # Remove status indicators
+                    repo.git.add(file)
+                console.print(f"[green]Staged selected files: {', '.join(file[3:] for file in selected)}[/green]")
+            else:
+                console.print("[yellow]No files selected for staging.[/yellow]")
+        elif files:
+            repo.git.add(files)
+            console.print(f"[green]Staged specified files: {', '.join(files)}[/green]")
+        else:
+            # Get only unstaged files
+            status = repo.git.status('--porcelain').splitlines()
+            unstaged = [s for s in status if s.startswith(' M') or s.startswith('??')]
+            
+            if not unstaged:
+                console.print("[yellow]No unstaged changes to stage.[/yellow]")
+                return
+
+            console.print("[blue]Unstaged changes:[/blue]")
+            for s in unstaged:
+                console.print(s)
+
+            stage_all = inquirer.confirm(message="Do you want to stage all unstaged changes?", default=False).execute()
+            if stage_all:
+                repo.git.add('--all')
+                console.print("[green]Staged all unstaged changes.[/green]")
+            else:
+                console.print("[yellow]No changes staged. Use --all or specify files to stage.[/yellow]")
+
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        
+
+@app.command()
+def unstage(
+    all:         bool      = typer.Option  (False, "-a", "--all",         help="Unstage all changes"),
+    interactive: bool      = typer.Option  (False, "-i", "--interactive", help="Use interactive mode for unstaging"),
+    files:       List[str] = typer.Argument(None,                         help="Files or directories to unstage")
+):
+    """
+    Unstage changes from the staging area.
+
+    Examples:
+    - Unstage all changes        : ./gitflow.py unstage --all
+    - Unstage specific files     : ./gitflow.py unstage file1.py file2.py
+    - Use interactive unstaging  : ./gitflow.py unstage --interactive
+    """
+    try:
+        if all:
+            repo.git.reset()
+            console.print("[green]Unstaged all changes.[/green]")
+        elif interactive:
+            status = repo.git.diff('--name-status', '--cached').splitlines()
+            if not status:
+                console.print("[yellow]No staged changes to unstage.[/yellow]")
+                return
+
+            choices = [f"{s.split()[0]} {s.split()[1]}" for s in status]
+            selected = inquirer.checkbox(
+                message="Select files to unstage:",
+                choices=choices
+            ).execute()
+
+            if selected:
+                for item in selected:
+                    file = item.split()[1]  # Get filename
+                    repo.git.reset('HEAD', file)
+                console.print(f"[green]Unstaged selected files: {', '.join(item.split()[1] for item in selected)}[/green]")
+            else:
+                console.print("[yellow]No files selected for unstaging.[/yellow]")
+        elif files:
+            for file in files:
+                repo.git.reset('HEAD', file)
+            console.print(f"[green]Unstaged specified files: {', '.join(files)}[/green]")
+        else:
+            status = repo.git.diff('--name-status', '--cached').splitlines()
+            if not status:
+                console.print("[yellow]No staged changes to unstage.[/yellow]")
+                return
+
+            console.print("[blue]Staged changes:[/blue]")
+            for s in status:
+                console.print(s)
+
+            unstage_all = inquirer.confirm(message="Do you want to unstage all changes?", default=False).execute()
+            if unstage_all:
+                repo.git.reset()
+                console.print("[green]Unstaged all changes.[/green]")
+            else:
+                console.print("[yellow]No changes unstaged. Use --all or specify files to unstage.[/yellow]")
+
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
 #
 # Stash changes
 #
 @app.command()
 def stash(
-    push:    bool          = typer.Option(False, "-p", "--push",    help="Push a new stash"),
-    list:    bool          = typer.Option(False, "-l", "--list",    help="List all stashes"),
-    show:    Optional[str] = typer.Option(None,  "-s", "--show",    help="Show the changes in a stash"),
-    drop:    Optional[str] = typer.Option(None,  "-d", "--drop",    help="Drop a stash"),
-    clear:   bool          = typer.Option(False, "-c", "--clear",   help="Clear all stashes"),
-    message: Optional[str] = typer.Option(None,  "-m", "--message", help="Stash with a custom message")
+    list             : bool          = typer.Option(False, "-l", "--list",      help="List all stashes"),
+    show             : Optional[str] = typer.Option(None,  "-s", "--show",      help="Show the changes in a stash"),
+    drop             : Optional[str] = typer.Option(None,  "-d", "--drop",      help="Drop a stash"),
+    clear            : bool          = typer.Option(False, "-c", "--clear",     help="Clear all stashes"),
+    message          : Optional[str] = typer.Option(None,  "-m", "--message",   help="Stash with a custom message"),
+    include_untracked: bool          = typer.Option(False, "-u", "--untracked", help="Include untracked files in the stash")
 ):
     """
     Stash changes in the working directory.
 
     Examples:
-    - Stash changes               : ./gitflow.py stash
-    - Stash changes with a message: ./gitflow.py stash -m "Work in progress"
-    - List all stashes            : ./gitflow.py stash --list
-    - Show changes in a stash     : ./gitflow.py stash --show stash@{0}
-    - Drop a stash                : ./gitflow.py stash --drop stash@{0}
-    - Clear all stashes           : ./gitflow.py stash --clear
+    - Stash changes                   : ./gitflow.py stash
+    - Stash changes with a message    : ./gitflow.py stash -m "Work in progress"
+    - Stash including untracked files : ./gitflow.py stash --untracked
+    - List all stashes                : ./gitflow.py stash --list
+    - Show changes in a stash         : ./gitflow.py stash --show stash@{0}
+    - Drop a stash                    : ./gitflow.py stash --drop stash@{0}
+    - Clear all stashes               : ./gitflow.py stash --clear
     """
     try:
         if list:
@@ -1386,18 +1542,34 @@ def stash(
             console.print(f"[blue]Changes in {show}:[/blue]")
             console.print(stash_show)
         elif drop:
+            stash_info = repo.git.stash('list', show).strip()
             repo.git.stash('drop', drop)
-            console.print(f"[green]Dropped stash {drop}.[/green]")
+            console.print(f"[green]Deleted stash: {stash_info}[/green]")
         elif clear:
-            repo.git.stash('clear')
-            console.print("[green]Cleared all stashes.[/green]")
-        else:  # push is the default action
-            if message:
-                repo.git.stash('push', '-m', message)
-                console.print(f"[green]Stashed changes with message: {message}[/green]")
+            confirm = inquirer.confirm(message="Are you sure you want to clear all stashes?", default=False).execute()
+            if confirm:
+                repo.git.stash('clear')
+                console.print("[green]Cleared all stashes.[/green]")
             else:
-                repo.git.stash('push')
+                console.print("[yellow]Stash clear operation cancelled.[/yellow]")
+        else:  # push is the default action
+            stash_args = ['push']
+            if include_untracked:
+                stash_args.append('--include-untracked')
+            if message:
+                split_message = split_message_body(message)
+                stash_args.extend(['-m', split_message])
+            
+            repo.git.stash(*stash_args)
+            
+            if message:
+                console.print(f"[green]Stashed changes with message:[/green]\n{split_message}")
+            else:
                 console.print("[green]Stashed changes.[/green]")
+            
+            if include_untracked:
+                console.print("[blue]Included untracked files in the stash.[/blue]")
+
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
 
@@ -1407,8 +1579,9 @@ def stash(
 #
 @app.command()
 def unstash(
-    apply:    bool          = typer.Option  (False, "-a", "--apply", help="Apply the stash without removing it from the stash list"),
-    stash_id: Optional[str] = typer.Argument(None,                   help="The stash to apply (e.g., stash@{0})")
+    apply:       bool          = typer.Option (False, "-a", "--apply",       help="Apply the stash without removing it from the stash list"),
+    interactive: bool          = typer.Option (False, "-i", "--interactive", help="Interactively select a stash"),
+    stash_id:    Optional[str] = typer.Argument(None,                        help="The stash to apply (e.g., stash@{0})")
 ):
     """
     Apply and remove a stash (pop), or just apply it.
@@ -1418,25 +1591,32 @@ def unstash(
     - Apply the latest stash without removing it: ./gitflow.py unstash --apply
     - Pop a specific stash                      : ./gitflow.py unstash stash@{0}
     - Apply a specific stash without removing it: ./gitflow.py unstash --apply stash@{0}
+    - Interactively select a stash to pop       : ./gitflow.py unstash --interactive
+    - Interactively select a stash to apply     : ./gitflow.py unstash --interactive --apply
     """
     try:
+        if interactive or not stash_id:
+            stash_list = repo.git.stash('list').splitlines()
+            if not stash_list:
+                console.print("[yellow]No stashes found.[/yellow]")
+                return
+            
+            selected_stash = inquirer.select(
+                message="Select a stash:",
+                choices=stash_list
+            ).execute()
+            stash_id = selected_stash.split(':')[0]
+
         if apply:
-            if stash_id:
-                repo.git.stash('apply', stash_id)
-                console.print(f"[green]Applied stash {stash_id} without removing it.[/green]")
-            else:
-                repo.git.stash('apply')
-                console.print("[green]Applied the latest stash without removing it.[/green]")
+            repo.git.stash('apply', stash_id)
+            console.print(f"[green]Applied stash {stash_id} without removing it.[/green]")
         else:
-            if stash_id:
-                repo.git.stash('pop', stash_id)
-                console.print(f"[green]Popped stash {stash_id}.[/green]")
-            else:
-                repo.git.stash('pop')
-                console.print("[green]Popped the latest stash.[/green]")
+            repo.git.stash('pop', stash_id)
+            console.print(f"[green]Popped stash {stash_id}.[/green]")
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
 
+        
 
 #
 # Commit changes
@@ -1525,18 +1705,18 @@ def commit(
 #
 @app.command()
 def fetch(
-    remote: Optional[str] = typer.Argument(None, help="The name of the remote to fetch from (default is 'origin')"),
-    branch: Optional[str] = typer.Option(None, "--branch", "-b", help="Specific branch to fetch"),
-    prune: bool = typer.Option(False, "-p", "--prune", help="Prune deleted branches from the remote repository"),
-    all_remotes: bool = typer.Option(False, "-a", "--all", help="Fetch changes from all remotes")
+    remote:      Optional[str] = typer.Argument(None,                    help="The name of the remote to fetch from (default is 'origin')"),
+    branch:      Optional[str] = typer.Option  (None, "-b",  "--branch", help="Specific branch to fetch"),
+    prune:       bool          = typer.Option  (False, "-p", "--prune",  help="Prune deleted branches from the remote repository"),
+    all_remotes: bool          = typer.Option  (False, "-a", "--all",    help="Fetch changes from all remotes")
 ):
     """
     Fetch changes from the remote repository.
 
     Parameters:
-    - remote: The name of the remote to fetch from (default is 'origin').
-    - branch: Specific branch to fetch.
-    - prune: Prune deleted branches from the remote repository.
+    - remote     : The name of the remote to fetch from (default is 'origin').
+    - branch     : Specific branch to fetch.
+    - prune      : Prune deleted branches from the remote repository.
     - all_remotes: Fetch changes from all remotes.
 
     Examples:
@@ -1589,10 +1769,10 @@ def fetch(
 #
 @app.command()
 def merge(
-    source: Optional[str] = typer.Argument(None, help="The source branch to merge from"),
-    target: Optional[str] = typer.Argument(None, help="The target branch to merge into"),
-    squash: bool = typer.Option(False, "--squash", help="Squash commits when merging"),
-    no_ff: bool = typer.Option(True, "--no-ff", help="Create a merge commit even when fast-forward is possible")
+    source: Optional[str] = typer.Argument(None,              help="The source branch to merge from"),
+    target: Optional[str] = typer.Argument(None,              help="The target branch to merge into"),
+    squash: bool          = typer.Option  (False, "--squash", help="Squash commits when merging"),
+    no_ff:  bool          = typer.Option  (True,  "--no-ff",  help="Create a merge commit even when fast-forward is possible")
 ):
     """
     Merge one local branch into another.
@@ -1601,7 +1781,7 @@ def merge(
     - source: The source branch to merge from. If not specified, the current branch will be used.
     - target: The target branch to merge into. If not specified, will be prompted.
     - squash: Squash commits when merging.
-    - no_ff: Create a merge commit even when fast-forward is possible (default: True).
+    - no_ff : Create a merge commit even when fast-forward is possible (default: True).
 
     Examples:
     - Merge current branch into main:
@@ -1871,8 +2051,9 @@ def push(
                 console.print("[yellow]Push aborted.[/yellow]")
                 return
 
-        # Check network connection before fetching
-        if check_network_connection():
+        offline = not check_network_connection()
+
+        if not offline:
             # Use our custom fetch function
             fetch(remote="origin", all_remotes=False, prune=False)
 
@@ -1919,7 +2100,7 @@ def push(
         if changes_made or create_pr:
             try:
                 if create_pr:
-                    if check_network_connection():
+                    if not offline:
                         console.print(f"[yellow]Creating pull request to merge {current_branch} into {branch}.[/yellow]")
                         result = subprocess.run(
                             ["gh", "pr", "create", "--base", branch, "--head", current_branch,
@@ -1931,7 +2112,7 @@ def push(
                     else:
                         console.print("[yellow]No network connection. Unable to create pull request.[/yellow]")
                 else:
-                    if check_network_connection():
+                    if not offline:
                         if force:
                             repo.git.push('origin', branch, '--force')
                         else:
@@ -1945,7 +2126,7 @@ def push(
                     # Create a new branch for the pull request
                     new_branch_name = f"update-{branch}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                     repo.git.checkout('-b', new_branch_name)
-                    if check_network_connection():
+                    if not offline:
                         repo.git.push('origin', new_branch_name)
                         result = subprocess.run(
                             ["gh", "pr", "create", "--base", branch, "--head", new_branch_name,
@@ -1973,11 +2154,11 @@ def push(
 #
 @app.command()
 def pull(
-    remote: str = typer.Option("origin", help="The name of the remote to pull from"),
-    branch: Optional[str] = typer.Option(None, help="The branch to pull. If not specified, pulls the current branch"),
-    rebase: bool = typer.Option(False, "--rebase", "-r", help="Rebase the current branch on top of the upstream branch after fetching"),
-    all_branches: bool = typer.Option(False, "--all", "-a", help="Pull all branches"),
-    prune: bool = typer.Option(False, "--prune", "-p", help="Prune remote-tracking branches no longer on remote")
+    remote:       str           = typer.Option("origin",                help="The name of the remote to pull from"),
+    branch:       Optional[str] = typer.Option(None,                    help="The branch to pull. If not specified, pulls the current branch"),
+    all_branches: bool          = typer.Option(False,"-a",  "--all",    help="Pull all branches"),
+    prune:        bool          = typer.Option(False,"-p",  "--prune",  help="Prune remote-tracking branches no longer on remote"),
+    rebase:       bool          = typer.Option(False,"-r",  "--rebase", help="Rebase the current branch on top of the upstream branch after fetching")
 ):
     """
     Pull changes from a remote repository.
@@ -2275,6 +2456,8 @@ def cp(
         ./gitflow.py cp gitflow.py main --pr
     """
     try:
+        offline = not check_network_connection()
+
         # Save the current branch
         original_branch = repo.active_branch.name
 
@@ -2319,48 +2502,51 @@ def cp(
 
             # Push changes or create a pull request
             if push or create_pr:
-                try:
-                    if create_pr:
-                        # Create a new branch for the pull request
-                        pr_branch_name = f"cp-{file_path.replace('/', '-')}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                        repo.git.checkout('-b', pr_branch_name)
-                        repo.git.push('origin', pr_branch_name)
+                if not offline:
+                    try:
+                        if create_pr:
+                            # Create a new branch for the pull request
+                            pr_branch_name = f"cp-{file_path.replace('/', '-')}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                            repo.git.checkout('-b', pr_branch_name)
+                            repo.git.push('origin', pr_branch_name)
 
-                        # Create pull request
-                        result = subprocess.run(
-                            ["gh", "pr", "create", "--base", target_branch, "--head", pr_branch_name,
-                             "--title", f"Copy changes for {file_path} into {target_branch}",
-                             "--body", f"Automated pull request to copy changes for {file_path} from {original_branch} into {target_branch}"],
-                            capture_output=True, text=True
-                        )
-                        if result.returncode != 0:
-                            console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                            # Create pull request
+                            result = subprocess.run(
+                                ["gh", "pr", "create", "--base", target_branch, "--head", pr_branch_name,
+                                 "--title", f"Copy changes for {file_path} into {target_branch}",
+                                 "--body", f"Automated pull request to copy changes for {file_path} from {original_branch} into {target_branch}"],
+                                capture_output=True, text=True
+                            )
+                            if result.returncode != 0:
+                                console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                            else:
+                                console.print(f"[green]Created pull request to merge changes into {target_branch}[/green]")
                         else:
-                            console.print(f"[green]Created pull request to merge changes into {target_branch}[/green]")
-                    else:
-                        repo.git.push('origin', target_branch)
-                        console.print(f"[green]Pushed changes to {target_branch}[/green]")
-                except GitCommandError as e:
-                    if "protected branch" in str(e):
-                        console.print(f"[yellow]Protected branch {target_branch} detected. Creating a pull request instead.[/yellow]")
-                        # Create a new branch for the pull request
-                        pr_branch_name = f"cp-{file_path.replace('/', '-')}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                        repo.git.checkout('-b', pr_branch_name)
-                        repo.git.push('origin', pr_branch_name)
+                            repo.git.push('origin', target_branch)
+                            console.print(f"[green]Pushed changes to {target_branch}[/green]")
+                    except GitCommandError as e:
+                        if "protected branch" in str(e):
+                            console.print(f"[yellow]Protected branch {target_branch} detected. Creating a pull request instead.[/yellow]")
+                            # Create a new branch for the pull request
+                            pr_branch_name = f"cp-{file_path.replace('/', '-')}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                            repo.git.checkout('-b', pr_branch_name)
+                            repo.git.push('origin', pr_branch_name)
 
-                        # Create pull request
-                        result = subprocess.run(
-                            ["gh", "pr", "create", "--base", target_branch, "--head", pr_branch_name,
-                             "--title", f"Copy changes for {file_path} into {target_branch}",
-                             "--body", f"Automated pull request to copy changes for {file_path} from {original_branch} into {target_branch}"],
-                            capture_output=True, text=True
-                        )
-                        if result.returncode != 0:
-                            console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                            # Create pull request
+                            result = subprocess.run(
+                                ["gh", "pr", "create", "--base", target_branch, "--head", pr_branch_name,
+                                 "--title", f"Copy changes for {file_path} into {target_branch}",
+                                 "--body", f"Automated pull request to copy changes for {file_path} from {original_branch} into {target_branch}"],
+                                capture_output=True, text=True
+                            )
+                            if result.returncode != 0:
+                                console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                            else:
+                                console.print(f"[green]Created pull request to merge changes into {target_branch}[/green]")
                         else:
-                            console.print(f"[green]Created pull request to merge changes into {target_branch}[/green]")
-                    else:
-                        console.print(f"[red]Error while pushing: {e}[/red]")
+                            console.print(f"[red]Error while pushing: {e}[/red]")
+                else:
+                    console.print("[yellow]No network connection. Changes will be pushed when online.[/yellow]")
 
         # Return to the original branch
         repo.git.checkout(original_branch)
