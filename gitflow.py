@@ -2044,7 +2044,7 @@ def get_commit_message(message=None, body=None):
                 console.print("[green]AI-generated commit message:[/green]")
                 console.print(generated_message)
                 
-                edit_message = inquirer.confirm(message="Do you want to edit this message?", default=True).execute()
+                edit_message = inquirer.confirm(message="Do you want to edit this message?", default=False).execute()
                 if edit_message:
                     full_commit_message = edit_in_editor(generated_message)
                 else:
