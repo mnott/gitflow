@@ -1857,14 +1857,14 @@ def explain(
             
             prompt = f"""
             Explain the development history of the file '{filename}' over time. 
-            {'Provide a summary for each day that had changes.' if daily_summary else 'For each significant change, provide:'}
-          
-            1. Date of changes
-            2. Overall interpretation of the day's changes (purpose, theme, or goal)
-            3. List of individual commits, including:
-            - Brief description of what was modified
-            - The impact or purpose of the change
-            - Commit hash (shortened to 7 characters)
+            {'Provide a summary for each day that had changes, following this structure:' if daily_summary else 'For each significant change, provide:'}
+
+            {'1. Date of changes' if daily_summary else '1. Timestamp of the change'}
+            {'2. Overall interpretation of the day\'s changes (purpose, theme, or goal)' if daily_summary else '2. Brief description of what was modified'}
+            {'3. List of individual commits for the day, including:' if daily_summary else '3. The impact or purpose of the change'}
+            {' - Brief description of what was modified' if daily_summary else ''}
+            {' - The impact or purpose of the change' if daily_summary else ''}
+            {' - Commit hash (shortened to 7 characters)' if daily_summary else ''}
 
             Present the history from past to present, highlighting major milestones or significant refactors.
 
@@ -1878,18 +1878,18 @@ def explain(
             - Separate sections with a blank line.
             - Do not use asterisks (*) for headlines or emphasis.
 
-            Example structure:
-            2023-05-25:
-            Overall: Refactored script handling and updated documentation
+            {'Example structure for daily summary:' if daily_summary else 'Example structure for individual changes:'}
+            {'2023-05-25:' if daily_summary else '2023-05-25 14:30:00:'}
+            {'Overall: Refactored script handling and updated documentation' if daily_summary else 'Re-enabled regex for scripts directory'}
 
-            - Re-enabled regex for scripts directory (a48dfba)
-              Impact: Improved script filtering capabilities
-              
-            - Removed Obsidian exporter dependency (d402328)
-              Impact: Simplified codebase and reduced external dependencies
-              
-            - Updated documentation (bc32dba)
-              Impact: Improved user guidance and code maintainability
+            {'- Re-enabled regex for scripts directory (a48dfba)' if daily_summary else 'Impact: Improved script filtering capabilities'}
+            {'  Impact: Improved script filtering capabilities' if daily_summary else ''}
+
+            {'- Removed Obsidian exporter dependency (d402328)' if daily_summary else ''}
+            {'  Impact: Simplified codebase and reduced external dependencies' if daily_summary else ''}
+
+            {'- Updated documentation (bc32dba)' if daily_summary else ''}
+            {'  Impact: Improved user guidance and code maintainability' if daily_summary else ''}
 
             File history:
             {file_history}
