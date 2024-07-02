@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # encoding: utf-8
+
 r"""
 # Gitflow: A Git Wrapper for Release and Branch Management
 
-This script is a simple Git wrapper for managing feature, hotfix, and release branches.
+This script is a simple Git wrapper for managing local feature, hotfix, and release branches.
 It provides a set of commands to start, finish, and update branches, as well as to list
 branches, checkout a branch, add files to Git, commit changes, push changes, and
 cherry-pick a file from the current branch into a target branch.
@@ -33,6 +34,23 @@ To install the required libraries, run the following command:
 pip install -r requirements.txt
 ```
 
+# Configuration
+
+Before using the script, you need to configure your Git and GitHub settings. You can do
+this by running the following command:
+
+```bash
+./gitflow.py config
+```
+
+If you want to also configure your OpenAI API key for generating commit messages and
+explaining files and commits, you can run the following command:
+
+```bash
+./gitflow.py config-ai
+```
+
+
 # Usage
 
 To get help about the script, call it with the `--help` option:
@@ -40,6 +58,7 @@ To get help about the script, call it with the `--help` option:
 ```bash
 ./gitflow.py --help
 ```
+
 
 ## Hotfix Branches
 
@@ -165,7 +184,7 @@ To list all branches, run:
 To switch to a different branch using an interactive menu, run:
 
 ```bash
-./gitflow.py checkout
+./gitflow.py checkout <branch_name>
 ```
 
 ### Add Files to Git
@@ -176,7 +195,34 @@ To add file changes to the staging area, run:
 ./gitflow.py add gitflow.py README.md
 ```
 
-### Commit Changes
+### Stash and Pop Changes
+
+To stash changes, run:
+
+```bash
+./gitflow.py stash
+```
+
+To pop stashed changes, run:
+
+```bash
+./gitflow.py unstash
+```
+
+
+### Stage and Unstage Changes
+
+```bash
+./gitflow.py stage gitflow.py README.md
+```
+
+likewise,
+
+```bash
+./gitflow.py unstage gitflow.py README.md
+```
+
+### Commit Staged Changes
 
 To commit the current changes with a specified message, run:
 
@@ -184,12 +230,27 @@ To commit the current changes with a specified message, run:
 ./gitflow.py commit -m "Updated gitflow script"
 ```
 
+If you do not specify a commit message, you will be prompted to enter one,
+and you'll also be able to use the AI to generate one.
+
+
 ### Push Changes
 
 To push the committed changes to the remote repository, run:
 
 ```bash
 ./gitflow.py push feature/new-feature
+```
+
+This will optionally allow you to stage and commit all current changes.
+
+
+### Fetch Changes
+
+To fetch changes from the remote repository, run:
+
+```bash
+./gitflow.py fetch
 ```
 
 ### Pull Changes
@@ -214,16 +275,93 @@ To copy the latest commit of a specific file from the current branch into a targ
 ./gitflow.py cp gitflow.py feature/new-feature
 ```
 
+### Rename a Branch
+
+To rename a branch run (if you do not specify branch names, you will get an interactive menu):
+
+```bash
+./gitflow.py mv <old_branch_name> <new_branch_name>
+```
+
 ### Delete a Branch
 
 To delete a branch using an interactive menu, run:
 
 ```bash
-./gitflow.py rm
+./gitflow.py rm <branch_name>
 ```
 
+Use the `-a` option to delete the branch both from local and remote. If the branch was
+not fully merged, you are going to receive an error. You can force the deletion using
+the `-f` option.
 
-### Document the script
+
+## Merge Operations
+
+### Merge a Branch
+
+To merge a branch into the current branch, run:
+
+```bash
+./gitflow.py merge <branch_name>
+```
+
+### Merge a Branch into Another Branch
+
+To merge a branch into another branch, run:
+
+```bash
+./gitflow.py merge <source_branch> <target_branch>
+```
+
+## AI Options
+
+The script also provides options to configure the OpenAI API key and use it to generate
+documentation for the script.
+
+### Use AI to generate commit messages
+
+Whenever you would use the -m option to pass in a message, you can alternatively
+also not do that and then be asked whether you want to use the AI to generate a
+commit message for you.
+
+### Explain Commits or Files
+
+To explain a commit or a file, run:
+
+```bash
+./gitflow.py explain --commit <commit_hash>
+```
+
+To explain changes between two commits, run
+
+```bash
+./gitflow.py explain --start <commit_hash1> --end <commit_hash2>
+```
+
+Any explanations of commits can be further refined by adding
+
+- `-d` To get the number of days in the past to parse
+- `--daily` to get a daily summary of the commits of those days
+
+To explain a file or a set of files, you can run:
+
+```bash
+./gitflow.py explain <file_names relative to the git root>
+```
+
+When explaining a file, you can also specify the `--improve` option to receive
+feedback about what you could improve in the file; adding `--examples` will
+provide examples of how to improve the file.
+
+All explanations can be further improved by adding the `--prompt` option, which,
+followed by a prompt that you specify, will refine the explanations further.
+
+Alternatively, you can also just get a summary of what the file does by adding
+the `--summary` option.
+
+
+## Document the script
 
 To re-create the documentation and write it to the output file, run:
 
@@ -231,13 +369,10 @@ To re-create the documentation and write it to the output file, run:
 ./gitflow.py doc
 ```
 
-
 # License
 
-This script is released under the WTFP License.
-
+This script is released under the [WTFPL License](https://en.wikipedia.org/wiki/WTFPL).
 """
-
 
 import sys
 import os
@@ -258,11 +393,9 @@ from git import Repo, GitCommandError
 from typing import Optional, List
 from InquirerPy import inquirer
 
-import zipfile
 import tempfile
 import requests
 import os
-import configparser
 
 pretty.install()
 traceback.install()
@@ -1814,14 +1947,18 @@ def get_manual_commit_message(message, body):
 #
 @app.command()
 def explain(
-    start_commit:  Optional[str] = typer.Argument(None,                   help="Starting commit hash. If not provided, uses the current state."),
-    end_commit:    Optional[str] = typer.Argument(None,                   help="Ending commit hash. If not provided, uses HEAD."),
-    model:         str           = typer.Option ("gpt-4o",                help="AI model to use"),
-    filename:      Optional[str] = typer.Option (None, "-f", "--file",    help="Explain the development history of a specific file"),
-    days:          Optional[int] = typer.Option (None, "-d", "--days",    help="Number of days to look back in history"),
-    daily_summary: bool          = typer.Option (False,      "--daily",   help="Provide a summary on a daily basis instead of per commit"),
-    summary:       bool          = typer.Option (False,      "--summary", help="Provide a high-level summary of what the file is for"),
-    as_command:    bool          = typer.Option (True, hidden=True)
+    files:         List[str]     = typer.Argument(None,                      help="Files to explain. If not provided, uses the current state."),
+    commit:        Optional[str] = typer.Option  (None,  "-c", "--commit",   help="If we are to analyze only one given commit hash."),
+    start:         Optional[str] = typer.Option  (None,  "-s", "--start",    help="Starting commit hash."),
+    end:           Optional[str] = typer.Option  (None,  "-e", "--end",      help="Ending commit hash. If not provided, uses HEAD."),
+    model:         str           = typer.Option  ("gpt-4o",                  help="AI model to use"),
+    days:          Optional[int] = typer.Option  (None,  "-d", "--days",     help="Number of days to look back in history"),
+    daily_summary: bool          = typer.Option  (False,       "--daily",    help="Provide a summary on a daily basis instead of per commit"),
+    summary:       bool          = typer.Option  (False,       "--summary",  help="Provide a high-level summary of what the file is for"),
+    improve:       bool          = typer.Option  (False, "-i", "--improve",  help="Provide suggestions for improving the file"),
+    custom_prompt: Optional[str] = typer.Option  (None,  "-p", "--prompt",   help="Additional custom prompt to include in the request"),
+    examples:      bool          = typer.Option  (False,       "--examples", help="Include specific code examples in improvement suggestions"),
+    as_command:    bool          = typer.Option  (True, hidden=True)
 ):
     """
     Generate an explanation using AI based on changes between two commits, the current state, or file history.
@@ -1834,16 +1971,24 @@ def explain(
     Examples:
     - Generate an explanation for current changes:
         ./gitflow.py explain
+    - Generate an explanation for a given commit
+        ./gitflow.py explain --commit def456
     - Generate an explanation for changes between two commits:
-        ./gitflow.py explain abc123 def456
-    - Explain the history of a specific file:
-        ./gitflow.py explain -f path/to/file.py
-    - Explain the relevance of a specific file:
-        ./gitflow.py explain -f path/to/file.py --summary
-    - Explain the history of a specific file for the last 30 days:
-        ./gitflow.py explain -f path/to/file.py -d 30
-    - Explain the daily summary of a file for the last 30 days:
-        ./gitflow.py explain -f path/to/file.py -d 30 --daily        
+        ./gitflow.py explain --start abc123 --end def456
+    - Explain the history of specific files:
+        ./gitflow.py explain path/to/file1.py path/to/file2.py
+    - Explain the relevance of specific files:
+        ./gitflow.py explain path/to/file1.py path/to/file2.py --summary
+    - Explain the history of specific files for the last 30 days:
+        ./gitflow.py explain path/to/file1.py path/to/file2.py -d 30
+    - Explain the daily summary of files for the last 30 days:
+        ./gitflow.py explain path/to/file1.py path/to/file2.py -d 30 --daily
+    - Provide improvement suggestions for files:
+        ./gitflow.py explain path/to/file1.py path/to/file2.py --improve
+    - Provide improvement suggestions with code examples:
+        ./gitflow.py explain path/to/file1.py path/to/file2.py --improve --examples
+    - Use a custom prompt addition:
+        ./gitflow.py explain path/to/file1.py --prompt "Focus on performance improvements"      
     """
     try:
         api_key = get_api_key()
@@ -1851,50 +1996,105 @@ def explain(
             console.print("[red]Failed to get OpenAI API key. Cannot generate explanation.[/red]")
             return None
         
-        if filename:
-            # Fetch file history
-            file_history = get_file_history(filename, days, daily_summary)
-            if not file_history:
-                console.print(f"[red]No history found for file: {filename}[/red]")
-                return None
-            
-            if summary:
+        if files:
+            file_contents = {}
+            file_histories = {}
+            for file in files:
+                if os.path.isdir(file):
+                    console.print(f"[yellow]Skipping directory: {file}[/yellow]")
+                    continue
+                
+                # Fetch file history
+                file_history = get_file_history(file, days, daily_summary)
+                if file_history is None or file_history.strip() == '':
+                    console.print(f"[yellow]No history found for file: {file}. Using current content only.[/yellow]")
+                    file_history = "No commit history available."
+                
                 # Get the current content of the file from Git
                 try:
-                    current_content = repo.git.show(f'HEAD:{filename}')
+                    current_content = repo.git.show(f'HEAD:{file}')
                 except GitCommandError:
-                    console.print(f"[yellow]Warning: Couldn't retrieve current content of {filename} from Git. Using local file.[/yellow]")
+                    console.print(f"[yellow]Warning: Couldn't retrieve current content of {file} from Git. Using local file.[/yellow]")
                     try:
-                        with open(filename, 'r') as file:
-                            current_content = file.read()
+                        with open(file, 'r') as f:
+                            current_content = f.read()
                     except FileNotFoundError:
-                        console.print(f"[red]Error: File not found: {filename}[/red]")
-                        return None
+                        console.print(f"[red]Error: File not found: {file}[/red]")
+                        continue
 
+                file_contents[file] = current_content[:30000]  # Limit to first 30000 characters
+                file_histories[file] = file_history
+
+            if not file_contents:
+                console.print("[red]No valid files to analyze.[/red]")
+                return None
+
+            if improve:
                 prompt = f"""
-                Provide a high-level summary of what the file '{filename}' is for.
-                Consider its current content and development history to explain its purpose,
-                main functionalities, and its role within the project.
+                Analyze the following file(s) and provide suggestions for improvement.
+                Consider each file's current content, its development history, and best practices
+                for the file's language or purpose.
 
-                Current file content (first 3000 characters):
-                {current_content[:3000]}
+                Files to analyze:
+                {', '.join(file_contents.keys())}
 
-                Brief development history:
-                {file_history[:1000]}  # Limit to first 1000 characters of history
+                For each file, please provide:
+                1. A brief overview of the file's current state and purpose.
+                2. 3-5 specific suggestions for improvement, considering:
+                - Code quality and readability
+                - Performance optimizations
+                - Best practices for the file's language or framework
+                - Potential bugs or security issues
+                - Architecture and design patterns
+                3. Any notable trends or patterns in the file's development history
+                that might inform future improvements.
+
+                {"For each suggestion, provide a specific code example of how to implement the improvement." if examples else ""}
+
+                Format your response as follows:
+                - Start with an overview of each file
+                - List each suggestion with a brief explanation
+                {"- Follow each suggestion with a code example, clearly marked" if examples else ""}
+                - Conclude with insights from the development history
+
+                Important: Be specific and provide actionable suggestions.
+                Explain the rationale behind each suggestion.
+                {"When providing code examples, ensure they are relevant, concise, and clearly illustrate the suggested improvement." if examples else ""}
+
+                File contents and histories:
+                """
+                for file, content in file_contents.items():
+                    prompt += f"\n\n{file} content:\n{content}\n\nHistory:\n{file_histories[file]}"
+
+            elif summary:
+                prompt = f"""
+                Provide a high-level summary of what the following file(s) are for.
+                Consider their current content and development history to explain their purpose,
+                main functionalities, and their role within the project.
+
+                Files to summarize:
+                {', '.join(file_contents.keys())}
+
+                For each file, please provide:
+                1. The main purpose of the file
+                2. Key functionalities or components
+                3. How it fits into the overall project structure
+                4. Any significant changes or trends in its development history
+
+                Format your response as a concise yet comprehensive summary for each file.
 
                 Important: Start your response directly with the summary. Do not use
                 any introductory phrases like "Sure," "Here's," or "Certainly."
 
-                Format:
-                - Use plain text only. No markup language or formatting.
-                - Aim for a concise yet comprehensive summary.
-                - Highlight the main purpose and key features of the file.
-                - If relevant, mention how the file's purpose has evolved over time.
+                File contents and histories:
                 """
-            else:
+                for file, content in file_contents.items():
+                    prompt += f"\n\n{file} content:\n{content}\n\nHistory:\n{file_histories[file]}"
+
+            elif files:
                 if daily_summary:            
                     prompt = f"""
-                    Explain the development history of the file '{filename}' over time.
+                    Explain the development history of the following file(s) over time.
                     Provide a summary for each day that had changes, following this structure:
 
                     1. Date of changes
@@ -1928,12 +2128,16 @@ def explain(
                     improved maintainability
                     - Commits: 3
 
-                    File history:
-                    {file_history}
+                    Files to explain:
+                    {', '.join(file_contents.keys())}
+
+                    File histories:
                     """
+                    for file, history in file_histories.items():
+                        prompt += f"\n\n{file} history:\n{history}"
                 else:
                     prompt = f"""
-                    Explain the development history of the file '{filename}' over time. 
+                    Explain the development history of the following file(s) over time. 
                     For each significant change, provide:
 
                     1. Timestamp of the change
@@ -1968,17 +2172,21 @@ def explain(
                     - Impact: Improved user guidance and code maintainability
                     - Commit: bc32dba
 
-                    File history:
-                    {file_history}
-                    """                    
+                    Files to explain:
+                    {', '.join(file_contents.keys())}
 
-            content = file_history
+                    File histories:
+                    """
+                    for file, history in file_histories.items():
+                        prompt += f"\n\n{file} history:\n{history}"
         else:
             # Determine the diff based on provided commits
-            if start_commit and end_commit:
-                diff = repo.git.diff(start_commit, end_commit)
-            elif start_commit:
-                diff = repo.git.diff(start_commit)
+            if commit:
+                diff = repo.git.show(f'{commit}^..{commit}')
+            elif start and end:
+                diff = repo.git.diff(start, end)
+            elif start:
+                diff = repo.git.diff(start)
             else:
                 # Get diff of unstaged changes
                 unstaged_diff = repo.git.diff()
@@ -2020,8 +2228,13 @@ def explain(
 
             Remember, the goal is to create a clear, informative commit message that future developers
             (including yourself) will find helpful when reviewing the project history.
+
+            Changes:
             """
-            content = diff[:100000]  # Truncated for API limits
+            prompt += diff[:100000]  # Truncated for API limits
+
+        if custom_prompt:
+            prompt += f"\n\nAdditional instructions: \n{custom_prompt}"
 
         # Prepare the API request
         url = "https://api.openai.com/v1/chat/completions"
@@ -2033,8 +2246,7 @@ def explain(
             "model": model,
             "messages": [
                 {"role": "system", "content": "You are a helpful assistant that explains code changes and development history."},
-                {"role": "user", "content": prompt},
-                {"role": "user", "content": f"Changes or history: {content}"}
+                {"role": "user", "content": prompt}
             ]
         }
 
@@ -2056,7 +2268,6 @@ def explain(
     except Exception as e:
         console.print(f"[red]Error generating explanation: {e}[/red]")
         return None
-
 
 def edit_in_editor(initial_message):
     # Create a temporary file
@@ -2099,7 +2310,7 @@ def get_file_history(filename, days=None, daily_summary=False):
                 if line:
                     commit_hash, timestamp, message = line.split(',', 2)
                     date = datetime.fromtimestamp(int(timestamp)).strftime('%Y-%m-%d')
-                    daily_commits[date].append(f"{message} (Commit: {commit_hash})")
+                    daily_commits[date].append(f"{message} (Commit: {commit_hash[:7]})")
             
             history = []
             for date, commits in sorted(daily_commits.items()):
@@ -2112,11 +2323,11 @@ def get_file_history(filename, days=None, daily_summary=False):
                 if line:
                     commit_hash, timestamp, message = line.split(',', 2)
                     date = datetime.fromtimestamp(int(timestamp)).strftime('%Y-%m-%d %H:%M:%S')
-                    history.append(f"{date} - {message} (Commit: {commit_hash})")
+                    history.append(f"{date} - {message} (Commit: {commit_hash[:7]})")
         
-        return "\n".join(history)
+        return '\n'.join(history)
     except GitCommandError as e:
-        console.print(f"[red]Error fetching file history: {e}[/red]")
+        console.print(f"[yellow]Warning: Error fetching file history: {e}[/yellow]")
         return None
 
 
@@ -2125,7 +2336,7 @@ def get_commit_message(message=None, body=None):
     if api_key:
         use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
         if use_ai:
-            generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False, days=None, daily_summary=False, filename=None)
+            generated_message = explain(files=None, commit=None, start=None, end=None, model="gpt-4o", as_command=False, days=None, daily_summary=False, summary=False, improve=False, custom_prompt=None, examples=False)
             if generated_message:
                 console.print("[green]AI-generated commit message:[/green]")
                 console.print(generated_message)
@@ -2274,7 +2485,7 @@ def merge(
                 if api_key:
                     use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
                     if use_ai:
-                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False, days=None, summary=False, daily_summary=False, filename=None)
+                        generated_message = explain(files=None, commit=None, start=None, end=None, model="gpt-4o", as_command=False, days=None, daily_summary=False, summary=False, improve=False, custom_prompt=None, examples=False)
                         if generated_message:
                             console.print("[green]AI-generated commit message:[/green]")
                             console.print(generated_message)

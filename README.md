@@ -3,7 +3,7 @@
 # Gitflow: A Git Wrapper for Release and Branch Management
 
 
-This script is a simple Git wrapper for managing feature, hotfix, and release branches.
+This script is a simple Git wrapper for managing local feature, hotfix, and release branches.
 It provides a set of commands to start, finish, and update branches, as well as to list
 branches, checkout a branch, add files to Git, commit changes, push changes, and
 cherry-pick a file from the current branch into a target branch.
@@ -33,6 +33,23 @@ To install the required libraries, run the following command:
 pip install -r requirements.txt
 ```
 
+# Configuration
+
+Before using the script, you need to configure your Git and GitHub settings. You can do
+this by running the following command:
+
+```bash
+./gitflow.py config
+```
+
+If you want to also configure your OpenAI API key for generating commit messages and
+explaining files and commits, you can run the following command:
+
+```bash
+./gitflow.py config-ai
+```
+
+
 # Usage
 
 To get help about the script, call it with the `--help` option:
@@ -40,6 +57,7 @@ To get help about the script, call it with the `--help` option:
 ```bash
 ./gitflow.py --help
 ```
+
 
 ## Hotfix Branches
 
@@ -165,7 +183,7 @@ To list all branches, run:
 To switch to a different branch using an interactive menu, run:
 
 ```bash
-./gitflow.py checkout
+./gitflow.py checkout <branch_name>
 ```
 
 ### Add Files to Git
@@ -176,7 +194,34 @@ To add file changes to the staging area, run:
 ./gitflow.py add gitflow.py README.md
 ```
 
-### Commit Changes
+### Stash and Pop Changes
+
+To stash changes, run:
+
+```bash
+./gitflow.py stash
+```
+
+To pop stashed changes, run:
+
+```bash
+./gitflow.py unstash
+```
+
+
+### Stage and Unstage Changes
+
+```bash
+./gitflow.py stage gitflow.py README.md
+```
+
+likewise,
+
+```bash
+./gitflow.py unstage gitflow.py README.md
+```
+
+### Commit Staged Changes
 
 To commit the current changes with a specified message, run:
 
@@ -184,12 +229,27 @@ To commit the current changes with a specified message, run:
 ./gitflow.py commit -m "Updated gitflow script"
 ```
 
+If you do not specify a commit message, you will be prompted to enter one,
+and you'll also be able to use the AI to generate one.
+
+
 ### Push Changes
 
 To push the committed changes to the remote repository, run:
 
 ```bash
 ./gitflow.py push feature/new-feature
+```
+
+This will optionally allow you to stage and commit all current changes.
+
+
+### Fetch Changes
+
+To fetch changes from the remote repository, run:
+
+```bash
+./gitflow.py fetch
 ```
 
 ### Pull Changes
@@ -214,16 +274,93 @@ To copy the latest commit of a specific file from the current branch into a targ
 ./gitflow.py cp gitflow.py feature/new-feature
 ```
 
+### Rename a Branch
+
+To rename a branch run (if you do not specify branch names, you will get an interactive menu):
+
+```bash
+./gitflow.py mv <old_branch_name> <new_branch_name>
+```
+
 ### Delete a Branch
 
 To delete a branch using an interactive menu, run:
 
 ```bash
-./gitflow.py rm
+./gitflow.py rm <branch_name>
 ```
 
+Use the `-a` option to delete the branch both from local and remote. If the branch was
+not fully merged, you are going to receive an error. You can force the deletion using
+the `-f` option.
 
-### Document the script
+
+## Merge Operations
+
+### Merge a Branch
+
+To merge a branch into the current branch, run:
+
+```bash
+./gitflow.py merge <branch_name>
+```
+
+### Merge a Branch into Another Branch
+
+To merge a branch into another branch, run:
+
+```bash
+./gitflow.py merge <source_branch> <target_branch>
+```
+
+## AI Options
+
+The script also provides options to configure the OpenAI API key and use it to generate
+documentation for the script.
+
+### Use AI to generate commit messages
+
+Whenever you would use the -m option to pass in a message, you can alternatively
+also not do that and then be asked whether you want to use the AI to generate a
+commit message for you.
+
+### Explain Commits or Files
+
+To explain a commit or a file, run:
+
+```bash
+./gitflow.py explain --commit <commit_hash>
+```
+
+To explain changes between two commits, run
+
+```bash
+./gitflow.py explain --start <commit_hash1> --end <commit_hash2>
+```
+
+Any explanations of commits can be further refined by adding
+
+- `-d` To get the number of days in the past to parse
+- `--daily` to get a daily summary of the commits of those days
+
+To explain a file or a set of files, you can run:
+
+```bash
+./gitflow.py explain <file_names relative to the git root>
+```
+
+When explaining a file, you can also specify the `--improve` option to receive
+feedback about what you could improve in the file; adding `--examples` will
+provide examples of how to improve the file.
+
+All explanations can be further improved by adding the `--prompt` option, which,
+followed by a prompt that you specify, will refine the explanations further.
+
+Alternatively, you can also just get a summary of what the file does by adding
+the `--summary` option.
+
+
+## Document the script
 
 To re-create the documentation and write it to the output file, run:
 
@@ -231,7 +368,6 @@ To re-create the documentation and write it to the output file, run:
 ./gitflow.py doc
 ```
 
-
 # License
 
-This script is released under the WTFP License.
+This script is released under the [WTFPL License](https://en.wikipedia.org/wiki/WTFPL).
