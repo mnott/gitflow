@@ -1891,47 +1891,87 @@ def explain(
                 - Highlight the main purpose and key features of the file.
                 - If relevant, mention how the file's purpose has evolved over time.
                 """
-            else:            
-                prompt = f"""
-                Explain the development history of the file '{filename}' over time. 
-                {'Provide a summary for each day that had changes, following this structure:' if daily_summary else 'For each significant change, provide:'}
+            else:
+                if daily_summary:            
+                    prompt = f"""
+                    Explain the development history of the file '{filename}' over time.
+                    Provide a summary for each day that had changes, following this structure:
 
-                {'1. Date of changes' if daily_summary else '1. Timestamp of the change'}
-                {'2. Overall interpretation of the day\'s changes (purpose, theme, or goal)' if daily_summary else '2. Brief description of what was modified'}
-                {'3. List of individual commits for the day, including:' if daily_summary else '3. The impact or purpose of the change'}
-                {' - Brief description of what was modified' if daily_summary else ''}
-                {' - The impact or purpose of the change' if daily_summary else ''}
-                {' - Commit hash (shortened to 7 characters)' if daily_summary else ''}
+                    1. Date of changes
+                    2. Overall interpretation of the day's changes (purpose, theme, or goal)
+                    3. Brief summary of all changes made that day, including:
+                    - Key modifications
+                    - Overall impact or purpose of the day's changes
+                    - Number of commits
 
-                Present the history from past to present, highlighting major milestones or significant refactors.
+                    Present the history from past to present, highlighting major milestones or significant refactors.
 
-                Important: Start your response directly with the explanation. Do not use
-                any introductory phrases like "Sure," "Here's," or "Certainly."
+                    Important: Start your response directly with the explanation. Do not use
+                    any introductory phrases like "Sure," "Here's," or "Certainly."
 
-                Format:
-                - Use plain text only. No markup language or formatting (except as noted below).
-                - Limit each line to a maximum of 70 characters.
-                - Use bullet points (- ) for lists.
-                - Separate sections with a blank line.
-                - Do not use asterisks (*) for headlines or emphasis.
+                    Format:
+                    - Use plain text only. No markup language or formatting (except as noted below).
+                    - Limit each line to a maximum of 70 characters.
+                    - Use bullet points (- ) for lists.
+                    - Separate sections with a blank line.
+                    - Do not use asterisks (*) for headlines or emphasis.
+                    - Summarize all changes for each day, don't list individual commits.
 
-                {'Example structure for daily summary:' if daily_summary else 'Example structure for individual changes:'}
-                {'2023-05-25:' if daily_summary else '2023-05-25 14:30:00:'}
-                {'Overall: Refactored script handling and updated documentation' if daily_summary else 'Re-enabled regex for scripts directory'}
+                    Example structure:
 
-                {'- Re-enabled regex for scripts directory (a48dfba)' if daily_summary else 'Impact: Improved script filtering capabilities'}
-                {'  Impact: Improved script filtering capabilities' if daily_summary else ''}
+                    2023-05-25:
+                    Overall: Improved script functionality and documentation
 
-                {'- Removed Obsidian exporter dependency (d402328)' if daily_summary else ''}
-                {'  Impact: Simplified codebase and reduced external dependencies' if daily_summary else ''}
+                    - Key changes: Re-enabled regex for scripts, removed dependencies, 
+                    updated documentation
+                    - Impact: Enhanced filtering capabilities, simplified codebase, 
+                    improved maintainability
+                    - Commits: 3
 
-                {'- Updated documentation (bc32dba)' if daily_summary else ''}
-                {'  Impact: Improved user guidance and code maintainability' if daily_summary else ''}
+                    File history:
+                    {file_history}
+                    """
+                else:
+                    prompt = f"""
+                    Explain the development history of the file '{filename}' over time. 
+                    For each significant change, provide:
 
-                File history:
-                {file_history}
-                """
-            
+                    1. Timestamp of the change
+                    2. Brief description of what was modified
+                    3. The impact or purpose of the change
+                    4. Commit hash (shortened to 7 characters)
+
+                    Present the history from past to present, highlighting major milestones or significant refactors.
+
+                    Important: Start your response directly with the explanation. Do not use
+                    any introductory phrases like "Sure," "Here's," or "Certainly."
+
+                    Format:
+                    - Use plain text only. No markup language or formatting (except as noted below).
+                    - Limit each line to a maximum of 70 characters.
+                    - Use bullet points (- ) for lists.
+                    - Separate sections with a blank line.
+                    - Do not use asterisks (*) for headlines or emphasis.
+                    - If the description is the same as the commit message, do not repeat it.
+
+                    Example structure:
+
+                    2023-05-25 14:30:00: Re-enabled regex for scripts directory
+                    - Impact: Improved script filtering capabilities
+                    - Commit: a48dfba
+
+                    2023-05-25 15:45:00: Removed Obsidian exporter dependency
+                    - Impact: Simplified codebase and reduced external dependencies
+                    - Commit: d402328
+
+                    2023-05-25 16:20:00: Updated documentation
+                    - Impact: Improved user guidance and code maintainability
+                    - Commit: bc32dba
+
+                    File history:
+                    {file_history}
+                    """                    
+
             content = file_history
         else:
             # Determine the diff based on provided commits
