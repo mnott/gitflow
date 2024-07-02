@@ -1982,15 +1982,24 @@ def explain(
 
 
 def edit_in_editor(initial_message):
-    with tempfile.NamedTemporaryFile(mode='w+', suffix=".tmp") as temp_file:
-        temp_file.write(initial_message)
-        temp_file.flush()
+    # Create a temporary file
+    fd, temp_path = tempfile.mkstemp(suffix=".tmp")
+    try:
+        with os.fdopen(fd, 'w') as temp_file:
+            temp_file.write(initial_message)
 
         editor = os.environ.get('EDITOR', 'vim')  # Default to vim if EDITOR is not set
-        subprocess.call([editor, temp_file.name])
+        subprocess.call([editor, temp_path])
 
-        temp_file.seek(0)
-        return temp_file.read().strip()
+        # Read the edited content
+        with open(temp_path, 'r') as temp_file:
+            edited_content = temp_file.read().strip()
+
+        return edited_content
+
+    finally:
+        # Make sure we remove the temporary file
+        os.unlink(temp_path)
 
 
 def get_file_history(filename, days=None, daily_summary=False):
@@ -2046,7 +2055,10 @@ def get_commit_message(message=None, body=None):
                 
                 edit_message = inquirer.confirm(message="Do you want to edit this message?", default=False).execute()
                 if edit_message:
-                    full_commit_message = edit_in_editor(generated_message)
+                    edited_message = edit_in_editor(generated_message)
+                    console.print("[green]Edited commit message:[/green]")
+                    console.print(edited_message)
+                    full_commit_message = edited_message
                 else:
                     full_commit_message = generated_message
             else:
