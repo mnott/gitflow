@@ -1857,14 +1857,17 @@ def explain(
             
             prompt = f"""
             Explain the development history of the file '{filename}' over time. 
-            {'Provide a summary for each day that had changes.' if daily_summary else 'For each significant change, provide:'}
-            1. The {'date' if daily_summary else 'timestamp'} of the {'changes' if daily_summary else 'change'}
-            2. A brief description of what was modified
-            3. The impact or purpose of the {'day\'s changes' if daily_summary else 'change'}
+            Provide a summary for each day that had changes, following this structure:
 
-            Present the history from past to present, highlighting major
-            milestones or significant refactors.
-            
+            1. Date of changes
+            2. Overall interpretation of the day's changes (purpose, theme, or goal)
+            3. List of individual commits, including:
+            - Brief description of what was modified
+            - The impact or purpose of the change
+            - Commit hash (shortened to 7 characters)
+
+            Present the history from past to present, highlighting major milestones or significant refactors.
+
             Important: Start your response directly with the explanation. Do not use
             any introductory phrases like "Sure," "Here's," or "Certainly."
 
@@ -1873,11 +1876,25 @@ def explain(
             - Limit each line to a maximum of 70 characters.
             - Use bullet points (- ) for lists.
             - Separate sections with a blank line.
-            - Do not use asterics (*) for headlines or emphasis.
-            
+            - Do not use asterisks (*) for headlines or emphasis.
+
+            Example structure:
+            2023-05-25:
+            Overall: Refactored script handling and updated documentation
+
+            - Re-enabled regex for scripts directory (a48dfba)
+              Impact: Improved script filtering capabilities
+              
+            - Removed Obsidian exporter dependency (d402328)
+              Impact: Simplified codebase and reduced external dependencies
+              
+            - Updated documentation (bc32dba)
+              Impact: Improved user guidance and code maintainability
+
             File history:
-            {file_history}            
+            {file_history}
             """
+            
             content = file_history
         else:
             # Determine the diff based on provided commits
