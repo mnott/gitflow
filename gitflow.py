@@ -3111,25 +3111,27 @@ def compare(
 #
 @app.command()
 def cp(
-    file_path:     str           = typer.Argument(...,                 help="The path to the file to copy the latest commit for"),
-    target_branch: Optional[str] = typer.Argument(None,                help="The target branch to copy into"),
-    push:          bool          = typer.Option  (True, "--push",      help="Push the changes to the remote repository after copying"),
-    create_pr:     bool          = typer.Option  (False, "-p", "--pr", help="Create a pull request instead of pushing directly")
+    file_path:      str           = typer.Argument(...,                 help="The path to the file to copy the latest commit for"),
+    target_branches: List[str]    = typer.Argument(None,                help="The target branch(es) to copy into"),
+    push:           bool          = typer.Option  (True, "--push",      help="Push the changes to the remote repository after copying"),
+    create_pr:      bool          = typer.Option  (False, "-p", "--pr", help="Create a pull request instead of pushing directly")
 ):
     """
-    Copy the latest commit of a specific file from the current branch into a target branch.
+    Copy the latest commit of a specific file from the current branch into one or more target branches.
 
     Parameters:
-    - file_path    : The path to the file to copy the latest commit for.
-    - target_branch: The target branch to copy into.
-    - push         : Push the changes to the remote repository after copying if the remote branch exists.
-    - create_pr    : Create a pull request instead of pushing directly.
+    - file_path     : The path to the file to copy the latest commit for.
+    - target_branches: The target branch(es) to copy into. If not provided, you'll be prompted to select.
+    - push          : Push the changes to the remote repository after copying if the remote branch exists.
+    - create_pr     : Create a pull request instead of pushing directly.
 
     Examples:
     - Copy the latest commit of gitflow.py into a feature branch:
         ./gitflow.py cp gitflow.py feature/new-feature --push
-    - Copy and create a pull request:
-        ./gitflow.py cp gitflow.py main --pr
+    - Copy into multiple branches:
+        ./gitflow.py cp gitflow.py feature/branch1 feature/branch2 main
+    - Copy and create pull requests:
+        ./gitflow.py cp gitflow.py main develop --pr
     """
     try:
         offline = not check_network_connection()
@@ -3145,84 +3147,88 @@ def cp(
             console.print(f"[red]Error: {file_path} not found in the current branch[/red]")
             return
 
-        # If target_branch is not provided, show a list of branches to select from
-        if not target_branch:
+        # If target_branches is not provided, show a list of branches to select from
+        if not target_branches:
             branches = [head.name for head in repo.heads if head.name != repo.active_branch.name]
-            target_branch = inquirer.select(message="Select a branch to copy into:", choices=branches).execute()
+            target_branches = inquirer.checkbox(
+                message="Select branch(es) to copy into:",
+                choices=branches
+            ).execute()
 
-        # Checkout the target branch
-        repo.git.checkout(target_branch)
-        console.print(f"[green]Switched to branch {target_branch}[/green]")
+        for target_branch in target_branches:
+            # Checkout the target branch
+            repo.git.checkout(target_branch)
+            console.print(f"[green]Switched to branch {target_branch}[/green]")
 
-        # Read the file content in the target branch
-        target_branch_file_content = ""
-        try:
-            with open(file_path, 'r') as target_file:
-                target_branch_file_content = target_file.read()
-        except FileNotFoundError:
-            pass  # It's okay if the file does not exist in the target branch
+            # Read the file content in the target branch
+            target_branch_file_content = ""
+            try:
+                with open(file_path, 'r') as target_file:
+                    target_branch_file_content = target_file.read()
+            except FileNotFoundError:
+                pass  # It's okay if the file does not exist in the target branch
 
-        # Compare the file contents
-        if current_branch_file_content == target_branch_file_content:
-            console.print(f"[yellow]File {file_path} is identical in both branches. Skipping copy.[/yellow]")
-        else:
-            # Write the content from the current branch into the target branch
-            with open(file_path, 'w') as target_file:
-                target_file.write(current_branch_file_content)
+            # Compare the file contents
+            if current_branch_file_content == target_branch_file_content:
+                console.print(f"[yellow]File {file_path} is identical in {target_branch}. Skipping copy.[/yellow]")
+            else:
+                # Write the content from the current branch into the target branch
+                with open(file_path, 'w') as target_file:
+                    target_file.write(current_branch_file_content)
 
-            # Commit the change
-            repo.git.add(file_path)
-            commit_message = f"Copy latest changes for {file_path} from {original_branch} to {target_branch}"
-            repo.git.commit('-m', commit_message)
-            console.print(f"[green]Copied the latest changes for {file_path} into {target_branch}[/green]")
+                # Commit the change
+                repo.git.add(file_path)
+                commit_message = f"Copy latest changes for {file_path} from {original_branch} to {target_branch}"
+                repo.git.commit('-m', commit_message)
+                console.print(f"[green]Copied the latest changes for {file_path} into {target_branch}[/green]")
 
-            # Push changes or create a pull request
-            if push or create_pr:
-                if not offline:
-                    try:
-                        if create_pr:
-                            # Create a new branch for the pull request
-                            pr_branch_name = f"cp-{file_path.replace('/', '-')}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                            repo.git.checkout('-b', pr_branch_name)
-                            repo.git.push('origin', pr_branch_name)
+                # Push changes or create a pull request
+                if push or create_pr:
+                    if not offline:
+                        try:
+                            if create_pr:
+                                # Create a new branch for the pull request
+                                pr_branch_name = f"cp-{file_path.replace('/', '-')}-{target_branch}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                repo.git.checkout('-b', pr_branch_name)
+                                repo.git.push('origin', pr_branch_name)
 
-                            # Create pull request
-                            result = subprocess.run(
-                                ["gh", "pr", "create", "--base", target_branch, "--head", pr_branch_name,
-                                 "--title", f"Copy changes for {file_path} into {target_branch}",
-                                 "--body", f"Automated pull request to copy changes for {file_path} from {original_branch} into {target_branch}"],
-                                capture_output=True, text=True
-                            )
-                            if result.returncode != 0:
-                                console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                                # Create pull request
+                                result = subprocess.run(
+                                    ["gh", "pr", "create", "--base", target_branch, "--head", pr_branch_name,
+                                     "--title", f"Copy changes for {file_path} into {target_branch}",
+                                     "--body", f"Automated pull request to copy changes for {file_path} from {original_branch} into {target_branch}"],
+                                    capture_output=True, text=True
+                                )
+                                if result.returncode != 0:
+                                    console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                                else:
+                                    console.print(f"[green]Created pull request to merge changes into {target_branch}[/green]")
                             else:
-                                console.print(f"[green]Created pull request to merge changes into {target_branch}[/green]")
-                        else:
-                            repo.git.push('origin', target_branch)
-                            console.print(f"[green]Pushed changes to {target_branch}[/green]")
-                    except GitCommandError as e:
-                        if "protected branch" in str(e):
-                            console.print(f"[yellow]Protected branch {target_branch} detected. Creating a pull request instead.[/yellow]")
-                            # Create a new branch for the pull request
-                            pr_branch_name = f"cp-{file_path.replace('/', '-')}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                            repo.git.checkout('-b', pr_branch_name)
-                            repo.git.push('origin', pr_branch_name)
+                                repo.git.push('origin', target_branch)
+                                console.print(f"[green]Pushed changes to {target_branch}[/green]")
+                        except GitCommandError as e:
+                            if "protected branch" in str(e):
+                                console.print(f"[yellow]Protected branch {target_branch} detected. Creating a pull request instead.[/yellow]")
+                                # Create a new branch for the pull request
+                                pr_branch_name = f"cp-{file_path.replace('/', '-')}-{target_branch}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                repo.git.checkout('-b', pr_branch_name)
+                                repo.git.push('origin', pr_branch_name)
 
-                            # Create pull request
-                            result = subprocess.run(
-                                ["gh", "pr", "create", "--base", target_branch, "--head", pr_branch_name,
-                                 "--title", f"Copy changes for {file_path} into {target_branch}",
-                                 "--body", f"Automated pull request to copy changes for {file_path} from {original_branch} into {target_branch}"],
-                                capture_output=True, text=True
-                            )
-                            if result.returncode != 0:
-                                console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                                # Create pull request
+                                result = subprocess.run(
+                                    ["gh", "pr", "create", "--base", target_branch, "--head", pr_branch_name,
+                                     "--title", f"Copy changes for {file_path} into {target_branch}",
+                                     "--body", f"Automated pull request to copy changes for {file_path} from {original_branch} into {target_branch}"],
+                                    capture_output=True, text=True
+                                )
+                                if result.returncode != 0:
+                                    console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
+                                else:
+                                    console.print(f"[green]Created pull request to merge changes into {target_branch}[/green]")
                             else:
-                                console.print(f"[green]Created pull request to merge changes into {target_branch}[/green]")
-                        else:
-                            console.print(f"[red]Error while pushing: {e}[/red]")
-                else:
-                    console.print("[yellow]No network connection. Changes will be pushed when online.[/yellow]")
+                                console.print(f"[red]Error while pushing: {e}[/red]")
+                    else:
+                        console.print(f"[yellow]No network connection. Changes for {target_branch} will be pushed when online.[/yellow]")
 
         # Return to the original branch
         repo.git.checkout(original_branch)
