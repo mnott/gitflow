@@ -1857,8 +1857,8 @@ def explain(
             
             prompt = f"""
             Explain the development history of the file '{filename}' over time. 
-            Provide a summary for each day that had changes, following this structure:
-
+            {'Provide a summary for each day that had changes.' if daily_summary else 'For each significant change, provide:'}
+          
             1. Date of changes
             2. Overall interpretation of the day's changes (purpose, theme, or goal)
             3. List of individual commits, including:
