@@ -1814,13 +1814,14 @@ def get_manual_commit_message(message, body):
 #
 @app.command()
 def explain(
-    start_commit: Optional[str] = typer.Argument(None, help="Starting commit hash. If not provided, uses the current state."),
-    end_commit: Optional[str] = typer.Argument(None, help="Ending commit hash. If not provided, uses HEAD."),
-    model: str = typer.Option("gpt-4o", help="AI model to use"),
-    filename: Optional[str] = typer.Option(None, "-f", "--file", help="Explain the development history of a specific file"),
-    days: Optional[int] = typer.Option(None, "-d", "--days", help="Number of days to look back in history"),
-    daily_summary: bool = typer.Option(False, "--daily", help="Provide a summary on a daily basis instead of per commit"),
-    as_command: bool = typer.Option(True, hidden=True)
+    start_commit:  Optional[str] = typer.Argument(None,                   help="Starting commit hash. If not provided, uses the current state."),
+    end_commit:    Optional[str] = typer.Argument(None,                   help="Ending commit hash. If not provided, uses HEAD."),
+    model:         str           = typer.Option ("gpt-4o",                help="AI model to use"),
+    filename:      Optional[str] = typer.Option (None, "-f", "--file",    help="Explain the development history of a specific file"),
+    days:          Optional[int] = typer.Option (None, "-d", "--days",    help="Number of days to look back in history"),
+    daily_summary: bool          = typer.Option (False,      "--daily",   help="Provide a summary on a daily basis instead of per commit"),
+    summary:       bool          = typer.Option (False,      "--summary", help="Provide a high-level summary of what the file is for"),
+    as_command:    bool          = typer.Option (True, hidden=True)
 ):
     """
     Generate an explanation using AI based on changes between two commits, the current state, or file history.
@@ -1837,6 +1838,8 @@ def explain(
         ./gitflow.py explain abc123 def456
     - Explain the history of a specific file:
         ./gitflow.py explain -f path/to/file.py
+    - Explain the relevance of a specific file:
+        ./gitflow.py explain -f path/to/file.py --summary
     - Explain the history of a specific file for the last 30 days:
         ./gitflow.py explain -f path/to/file.py -d 30
     - Explain the daily summary of a file for the last 30 days:
@@ -1855,45 +1858,79 @@ def explain(
                 console.print(f"[red]No history found for file: {filename}[/red]")
                 return None
             
-            prompt = f"""
-            Explain the development history of the file '{filename}' over time. 
-            {'Provide a summary for each day that had changes, following this structure:' if daily_summary else 'For each significant change, provide:'}
+            if summary:
+                # Get the current content of the file from Git
+                try:
+                    current_content = repo.git.show(f'HEAD:{filename}')
+                except GitCommandError:
+                    console.print(f"[yellow]Warning: Couldn't retrieve current content of {filename} from Git. Using local file.[/yellow]")
+                    try:
+                        with open(filename, 'r') as file:
+                            current_content = file.read()
+                    except FileNotFoundError:
+                        console.print(f"[red]Error: File not found: {filename}[/red]")
+                        return None
 
-            {'1. Date of changes' if daily_summary else '1. Timestamp of the change'}
-            {'2. Overall interpretation of the day\'s changes (purpose, theme, or goal)' if daily_summary else '2. Brief description of what was modified'}
-            {'3. List of individual commits for the day, including:' if daily_summary else '3. The impact or purpose of the change'}
-            {' - Brief description of what was modified' if daily_summary else ''}
-            {' - The impact or purpose of the change' if daily_summary else ''}
-            {' - Commit hash (shortened to 7 characters)' if daily_summary else ''}
+                prompt = f"""
+                Provide a high-level summary of what the file '{filename}' is for.
+                Consider its current content and development history to explain its purpose,
+                main functionalities, and its role within the project.
 
-            Present the history from past to present, highlighting major milestones or significant refactors.
+                Current file content (first 3000 characters):
+                {current_content[:3000]}
 
-            Important: Start your response directly with the explanation. Do not use
-            any introductory phrases like "Sure," "Here's," or "Certainly."
+                Brief development history:
+                {file_history[:1000]}  # Limit to first 1000 characters of history
 
-            Format:
-            - Use plain text only. No markup language or formatting (except as noted below).
-            - Limit each line to a maximum of 70 characters.
-            - Use bullet points (- ) for lists.
-            - Separate sections with a blank line.
-            - Do not use asterisks (*) for headlines or emphasis.
+                Important: Start your response directly with the summary. Do not use
+                any introductory phrases like "Sure," "Here's," or "Certainly."
 
-            {'Example structure for daily summary:' if daily_summary else 'Example structure for individual changes:'}
-            {'2023-05-25:' if daily_summary else '2023-05-25 14:30:00:'}
-            {'Overall: Refactored script handling and updated documentation' if daily_summary else 'Re-enabled regex for scripts directory'}
+                Format:
+                - Use plain text only. No markup language or formatting.
+                - Aim for a concise yet comprehensive summary.
+                - Highlight the main purpose and key features of the file.
+                - If relevant, mention how the file's purpose has evolved over time.
+                """
+            else:            
+                prompt = f"""
+                Explain the development history of the file '{filename}' over time. 
+                {'Provide a summary for each day that had changes, following this structure:' if daily_summary else 'For each significant change, provide:'}
 
-            {'- Re-enabled regex for scripts directory (a48dfba)' if daily_summary else 'Impact: Improved script filtering capabilities'}
-            {'  Impact: Improved script filtering capabilities' if daily_summary else ''}
+                {'1. Date of changes' if daily_summary else '1. Timestamp of the change'}
+                {'2. Overall interpretation of the day\'s changes (purpose, theme, or goal)' if daily_summary else '2. Brief description of what was modified'}
+                {'3. List of individual commits for the day, including:' if daily_summary else '3. The impact or purpose of the change'}
+                {' - Brief description of what was modified' if daily_summary else ''}
+                {' - The impact or purpose of the change' if daily_summary else ''}
+                {' - Commit hash (shortened to 7 characters)' if daily_summary else ''}
 
-            {'- Removed Obsidian exporter dependency (d402328)' if daily_summary else ''}
-            {'  Impact: Simplified codebase and reduced external dependencies' if daily_summary else ''}
+                Present the history from past to present, highlighting major milestones or significant refactors.
 
-            {'- Updated documentation (bc32dba)' if daily_summary else ''}
-            {'  Impact: Improved user guidance and code maintainability' if daily_summary else ''}
+                Important: Start your response directly with the explanation. Do not use
+                any introductory phrases like "Sure," "Here's," or "Certainly."
 
-            File history:
-            {file_history}
-            """
+                Format:
+                - Use plain text only. No markup language or formatting (except as noted below).
+                - Limit each line to a maximum of 70 characters.
+                - Use bullet points (- ) for lists.
+                - Separate sections with a blank line.
+                - Do not use asterisks (*) for headlines or emphasis.
+
+                {'Example structure for daily summary:' if daily_summary else 'Example structure for individual changes:'}
+                {'2023-05-25:' if daily_summary else '2023-05-25 14:30:00:'}
+                {'Overall: Refactored script handling and updated documentation' if daily_summary else 'Re-enabled regex for scripts directory'}
+
+                {'- Re-enabled regex for scripts directory (a48dfba)' if daily_summary else 'Impact: Improved script filtering capabilities'}
+                {'  Impact: Improved script filtering capabilities' if daily_summary else ''}
+
+                {'- Removed Obsidian exporter dependency (d402328)' if daily_summary else ''}
+                {'  Impact: Simplified codebase and reduced external dependencies' if daily_summary else ''}
+
+                {'- Updated documentation (bc32dba)' if daily_summary else ''}
+                {'  Impact: Improved user guidance and code maintainability' if daily_summary else ''}
+
+                File history:
+                {file_history}
+                """
             
             content = file_history
         else:
@@ -2070,10 +2107,7 @@ def get_commit_message(message=None, body=None):
         full_commit_message = get_manual_commit_message(message, body)
     
     # Final confirmation
-    console.print("[blue]Final commit message:[/blue]")
-    console.print(full_commit_message)
-    confirm = inquirer.confirm(message="Do you want to use this commit message?", default=True).execute()
-    if not confirm:
+    if not inquirer.confirm(message="Do you want to use this commit message?", default=True).execute():
         return get_commit_message(message, body)  # Recursively call the function if the user doesn't confirm
     
     return full_commit_message
@@ -2200,7 +2234,7 @@ def merge(
                 if api_key:
                     use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
                     if use_ai:
-                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False, days=None, daily_summary=False, filename=None)
+                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False, days=None, summary=False, daily_summary=False, filename=None)
                         if generated_message:
                             console.print("[green]AI-generated commit message:[/green]")
                             console.print(generated_message)
