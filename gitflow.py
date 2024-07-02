@@ -243,7 +243,8 @@ import sys
 import os
 import glob
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
+from collections import defaultdict
 from pathlib import Path
 from rich import print
 from rich import traceback
@@ -695,28 +696,7 @@ def finish(
             ).execute()
 
             if action == "Commit changes":
-                api_key = get_api_key(save_if_missing=False)
-                if api_key:
-                    use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
-                    if use_ai:
-                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
-                        if generated_message:
-                            console.print("[green]AI-generated commit message:[/green]")
-                            console.print(generated_message)
-                            
-                            edit_message = inquirer.confirm(message="Do you want to edit this message?", default=False).execute()
-                            if edit_message:
-                                full_commit_message = edit_in_editor(generated_message)
-                            else:
-                                full_commit_message = generated_message
-                        else:
-                            console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
-                            full_commit_message = get_manual_commit_message(message, body)
-                    else:
-                        full_commit_message = get_manual_commit_message(message, body)
-                else:
-                    full_commit_message = get_manual_commit_message(message, body)
-
+                full_commit_message = get_commit_message()
                 repo.git.add('.')
                 repo.git.commit('-m', full_commit_message)
                 console.print("[green]Changes committed.[/green]")
@@ -852,29 +832,8 @@ def weekly_update(
 
         # Check for changes
         if repo.is_dirty(untracked_files=True):
-            # Prepare the commit message
-            api_key = get_api_key(save_if_missing=False)
-            
-            if api_key:
-                use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
-                if use_ai:
-                    generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
-                    if generated_message:
-                        console.print("[green]AI-generated commit message:[/green]")
-                        console.print(generated_message)
-                        
-                        edit_message = inquirer.confirm(message="Do you want to edit this message?", default=False).execute()
-                        if edit_message:
-                            full_commit_message = edit_in_editor(generated_message)
-                        else:
-                            full_commit_message = generated_message
-                    else:
-                        console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
-                        full_commit_message = get_manual_commit_message(message, body)
-                else:
-                    full_commit_message = get_manual_commit_message(message, body)
-            else:
-                full_commit_message = get_manual_commit_message(message, body)
+            # Get the commit message
+            full_commit_message = get_commit_message(message, body)
 
             # Commit changes
             repo.git.add('.')
@@ -969,28 +928,7 @@ def update(
             ).execute()
 
             if action == "Commit changes":
-                api_key = get_api_key(save_if_missing=False)
-                if api_key:
-                    use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
-                    if use_ai:
-                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
-                        if generated_message:
-                            console.print("[green]AI-generated commit message:[/green]")
-                            console.print(generated_message)
-                            
-                            edit_message = inquirer.confirm(message="Do you want to edit this message?", default=True).execute()
-                            if edit_message:
-                                full_commit_message = edit_in_editor(generated_message)
-                            else:
-                                full_commit_message = generated_message
-                        else:
-                            console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
-                            full_commit_message = get_manual_commit_message()
-                    else:
-                        full_commit_message = get_manual_commit_message()
-                else:
-                    full_commit_message = get_manual_commit_message()
-
+                full_commit_message = get_commit_message()
                 repo.git.add('.')
                 repo.git.commit('-m', full_commit_message)
                 console.print("[green]Changes committed.[/green]")
@@ -1294,28 +1232,7 @@ def rm(
                 ).execute()
 
                 if action == "Commit changes":
-                    api_key = get_api_key(save_if_missing=False)
-                    if api_key:
-                        use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
-                        if use_ai:
-                            generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
-                            if generated_message:
-                                console.print("[green]AI-generated commit message:[/green]")
-                                console.print(generated_message)
-                                
-                                edit_message = inquirer.confirm(message="Do you want to edit this message?", default=True).execute()
-                                if edit_message:
-                                    full_commit_message = edit_in_editor(generated_message)
-                                else:
-                                    full_commit_message = generated_message
-                            else:
-                                console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
-                                full_commit_message = get_manual_commit_message()
-                        else:
-                            full_commit_message = get_manual_commit_message()
-                    else:
-                        full_commit_message = get_manual_commit_message()
-
+                    full_commit_message = get_commit_message()
                     repo.git.add('.')
                     repo.git.commit('-m', full_commit_message)
                     console.print("[green]Changes committed.[/green]")
@@ -1468,28 +1385,7 @@ def mv(
             ).execute()
 
             if action == "Commit changes":
-                api_key = get_api_key(save_if_missing=False)
-                if api_key:
-                    use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
-                    if use_ai:
-                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
-                        if generated_message:
-                            console.print("[green]AI-generated commit message:[/green]")
-                            console.print(generated_message)
-                            
-                            edit_message = inquirer.confirm(message="Do you want to edit this message?", default=True).execute()
-                            if edit_message:
-                                full_commit_message = edit_in_editor(generated_message)
-                            else:
-                                full_commit_message = generated_message
-                        else:
-                            console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
-                            full_commit_message = get_manual_commit_message()
-                    else:
-                        full_commit_message = get_manual_commit_message()
-                else:
-                    full_commit_message = get_manual_commit_message()
-
+                full_commit_message = get_commit_message()
                 repo.git.add('.')
                 repo.git.commit('-m', full_commit_message)
                 console.print("[green]Changes committed.[/green]")
@@ -1881,25 +1777,9 @@ def commit(
 
         api_key = get_api_key(save_if_missing=False)
         if api_key and (interactive or not message):
-            use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
-            if use_ai:
-                generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
-                if generated_message:
-                    console.print("[green]AI-generated commit message:[/green]")
-                    console.print(generated_message)
-                    
-                    edit_message = inquirer.confirm(message="Do you want to edit this message?", default=False).execute()
-                    if edit_message:
-                        full_commit_message = edit_in_editor(generated_message)
-                    else:
-                        full_commit_message = generated_message
-                else:
-                    console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
-                    full_commit_message = get_manual_commit_message(message, body)
-            else:
-                full_commit_message = get_manual_commit_message(message, body)
+            full_commit_message = get_commit_message(message, body)
         else:
-            full_commit_message = get_manual_commit_message(message, body)
+            full_commit_message = get_manual_commit_message(message, body)        
 
         # Show the full commit message and ask for confirmation
         console.print(f"[blue]Full commit message:[/blue]\n{full_commit_message}")
@@ -1935,27 +1815,32 @@ def get_manual_commit_message(message, body):
 @app.command()
 def explain(
     start_commit: Optional[str] = typer.Argument(None, help="Starting commit hash. If not provided, uses the current state."),
-    end_commit:   Optional[str] = typer.Argument(None, help="Ending commit hash. If not provided, uses HEAD."),
-    model:        str           = typer.Option  ("gpt-4o", help="AI model to use"),
-    as_command:   bool          = typer.Option(True, hidden=True)
+    end_commit: Optional[str] = typer.Argument(None, help="Ending commit hash. If not provided, uses HEAD."),
+    model: str = typer.Option("gpt-4o", help="AI model to use"),
+    filename: Optional[str] = typer.Option(None, "-f", "--file", help="Explain the development history of a specific file"),
+    days: Optional[int] = typer.Option(None, "-d", "--days", help="Number of days to look back in history"),
+    daily_summary: bool = typer.Option(False, "--daily", help="Provide a summary on a daily basis instead of per commit"),
+    as_command: bool = typer.Option(True, hidden=True)
 ):
     """
-    Generate a commit message using AI based on changes between two commits or the current state.
+    Generate an explanation using AI based on changes between two commits, the current state, or file history.
 
     This command will:
-    1. Get the diff between two specified commits or the current state
-    2. Zip up the diff and changed files
-    3. Send to an AI model for analysis
-    4. Generate a commit message body
-    5. Optionally commit the changes with the generated message
+    1. Get the diff between two specified commits, the current state, or file history
+    2. Send to an AI model for analysis
+    3. Generate an explanation or commit message body
 
     Examples:
-    - Generate a commit message for current changes:
-        ./gitflow.py ai_commit
-    - Generate a commit message for changes between two commits:
-        ./gitflow.py ai_commit abc123 def456
-    - Generate and automatically commit current changes:
-        ./gitflow.py ai_commit --commit
+    - Generate an explanation for current changes:
+        ./gitflow.py explain
+    - Generate an explanation for changes between two commits:
+        ./gitflow.py explain abc123 def456
+    - Explain the history of a specific file:
+        ./gitflow.py explain -f path/to/file.py
+    - Explain the history of a specific file for the last 30 days:
+        ./gitflow.py explain -f path/to/file.py -d 30
+    - Explain the daily summary of a file for the last 30 days:
+        ./gitflow.py explain -f path/to/file.py -d 30 --daily        
     """
     try:
         api_key = get_api_key()
@@ -1963,106 +1848,116 @@ def explain(
             console.print("[red]Failed to get OpenAI API key. Cannot generate explanation.[/red]")
             return None
         
-        # Determine the diff based on provided commits
-        if start_commit and end_commit:
-            diff = repo.git.diff(start_commit, end_commit)
-            changed_files = repo.git.diff('--name-only', start_commit, end_commit).split('\n')
-        elif start_commit:
-            diff = repo.git.diff(start_commit)
-            changed_files = repo.git.diff('--name-only', start_commit).split('\n')
-        else:
-            # Get diff of unstaged changes
-            unstaged_diff = repo.git.diff()
-            # Get diff of staged changes
-            staged_diff = repo.git.diff('--cached')
-            # Combine unstaged and staged diffs
-            diff = unstaged_diff + "\n" + staged_diff
-            # Get both unstaged and staged changed files
-            changed_files = repo.git.status('--porcelain').split('\n')
-            changed_files = [line.split()[-1] for line in changed_files if line]
-
-        # Create a temporary directory
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a zip file
-            zip_path = os.path.join(tmpdir, 'changes.zip')
-            with zipfile.ZipFile(zip_path, 'w') as zipf:
-                # Add diff file
-                diff_path = os.path.join(tmpdir, 'diff.txt')
-                with open(diff_path, 'w') as f:
-                    f.write(diff)
-                zipf.write(diff_path, 'diff.txt')
-
-                # Add changed files
-                for file in changed_files:
-                    if file and os.path.exists(file):
-                        zipf.write(file)
-
-            # Read the zip file
-            with open(zip_path, 'rb') as f:
-                zip_content = f.read()
-
-            # Prepare the API request
-            url = "https://api.openai.com/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            data = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": "You are a helpful assistant that generates meaningful commit messages."},
-                    {"role": "user", "content": """
-Generate a concise and meaningful commit message body for the following code changes. Follow these guidelines:
-
-0. At the very beginning, write a concise headline that summarizes the changes. Use at a maximum 72 characters.
-
-1. Start with a brief summary (2-3 bullet points) of the high-level changes and intentions.
-
-2. Then, describe the changes in more detail, grouped by file or related functionality.
-
-3. Format:
-   - Use plain text only. No markup language or formatting (except as noted below).
-   - Limit each line to a maximum of 70 characters.
-   - Use bullet points (- ) for lists.
-   - Separate sections with a blank line.
-   - Do not use asterics (*) for headlines or emphasis.
-
-4. Code references:
-   - Minimize code blocks. Only use them for critical, short snippets.
-   - When necessary, place code on its own line, indented by 2 spaces.
-   - For function or class names, use single backticks (e.g., `function_name`).
-
-5. Focus on conveying the meaning and impact of the changes, not just listing them.
-
-6. If changes span multiple branches, organize the description by branch.
-
-7. Aim for a comprehensive yet concise message. Don't omit important details, but also avoid unnecessary verbosity.
-
-8. Remember, no line is to exceed 70 characters in length.
-
-9. Really remember, no line is to exceed 70 characters in length. Do an extra check for this.
-
-Remember, the goal is to create a clear, informative commit message that future developers
-(including yourself) will find helpful when reviewing the project history.
-                    """},
-                    {"role": "user", "content": f"Changes: {diff[:10000]}..."}  # Truncated for API limits
-                ]
-            }
-
-            # Make the API request
-            response = requests.post(url, headers=headers, json=data)
-            response.raise_for_status()
-
-            # Extract the generated message
-            generated_message = response.json()['choices'][0]['message']['content']
+        if filename:
+            # Fetch file history
+            file_history = get_file_history(filename, days, daily_summary)
+            if not file_history:
+                console.print(f"[red]No history found for file: {filename}[/red]")
+                return None
             
-            if as_command:
-                # Function was called as a command
-                console.print("[green]Explanation of the differences:[/green]")
-                console.print(generated_message)
+            prompt = f"""
+            Explain the development history of the file '{filename}' over time. 
+            {'Provide a summary for each day that had changes.' if daily_summary else 'For each significant change, provide:'}
+            1. The {'date' if daily_summary else 'timestamp'} of the {'changes' if daily_summary else 'change'}
+            2. A brief description of what was modified
+            3. The impact or purpose of the {'day\'s changes' if daily_summary else 'change'}
+
+            Present the history from past to present, highlighting major
+            milestones or significant refactors.
+            
+            Important: Start your response directly with the explanation. Do not use
+            any introductory phrases like "Sure," "Here's," or "Certainly."
+
+            Format:
+            - Use plain text only. No markup language or formatting (except as noted below).
+            - Limit each line to a maximum of 70 characters.
+            - Use bullet points (- ) for lists.
+            - Separate sections with a blank line.
+            - Do not use asterics (*) for headlines or emphasis.
+            
+            File history:
+            {file_history}            
+            """
+            content = file_history
+        else:
+            # Determine the diff based on provided commits
+            if start_commit and end_commit:
+                diff = repo.git.diff(start_commit, end_commit)
+            elif start_commit:
+                diff = repo.git.diff(start_commit)
             else:
-                # Function was called programmatically
-                return generated_message
+                # Get diff of unstaged changes
+                unstaged_diff = repo.git.diff()
+                # Get diff of staged changes
+                staged_diff = repo.git.diff('--cached')
+                # Combine unstaged and staged diffs
+                diff = unstaged_diff + "\n" + staged_diff
+
+            prompt = """
+            Generate a concise and meaningful commit message body for the following code changes. Follow these guidelines:
+
+            0. At the very beginning, write a concise headline that summarizes the changes. Use at a maximum 72 characters.
+
+            1. Start with a brief summary (2-3 bullet points) of the high-level changes and intentions.
+
+            2. Then, describe the changes in more detail, grouped by file or related functionality.
+
+            3. Format:
+            - Use plain text only. No markup language or formatting (except as noted below).
+            - Limit each line to a maximum of 70 characters.
+            - Use bullet points (- ) for lists.
+            - Separate sections with a blank line.
+            - Do not use asterics (*) for headlines or emphasis.
+
+            4. Code references:
+            - Minimize code blocks. Only use them for critical, short snippets.
+            - When necessary, place code on its own line, indented by 2 spaces.
+            - For function or class names, use single backticks (e.g., `function_name`).
+
+            5. Focus on conveying the meaning and impact of the changes, not just listing them.
+
+            6. If changes span multiple branches, organize the description by branch.
+
+            7. Aim for a comprehensive yet concise message. Don't omit important details, but also avoid unnecessary verbosity.
+
+            8. Remember, no line is to exceed 70 characters in length.
+
+            9. Really remember, no line is to exceed 70 characters in length. Do an extra check for this.
+
+            Remember, the goal is to create a clear, informative commit message that future developers
+            (including yourself) will find helpful when reviewing the project history.
+            """
+            content = diff[:100000]  # Truncated for API limits
+
+        # Prepare the API request
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant that explains code changes and development history."},
+                {"role": "user", "content": prompt},
+                {"role": "user", "content": f"Changes or history: {content}"}
+            ]
+        }
+
+        # Make the API request
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+
+        # Extract the generated message
+        generated_message = response.json()['choices'][0]['message']['content']
+        
+        if as_command:
+            # Function was called as a command
+            console.print("[green]Generated explanation:[/green]")
+            console.print(generated_message)
+        else:
+            # Function was called programmatically
+            return generated_message
 
     except Exception as e:
         console.print(f"[red]Error generating explanation: {e}[/red]")
@@ -2079,6 +1974,73 @@ def edit_in_editor(initial_message):
 
         temp_file.seek(0)
         return temp_file.read().strip()
+
+
+def get_file_history(filename, days=None, daily_summary=False):
+    try:
+        # Prepare the git log command
+        log_command = ['--follow', '--format=%H,%at,%s', '--', filename]
+        
+        # If days is specified, add the date filter
+        if days is not None:
+            since_date = datetime.now() - timedelta(days=days)
+            log_command = ['--since', since_date.strftime('%Y-%m-%d')] + log_command
+
+        # Get the git log for the specific file
+        log_output = repo.git.log(*log_command)
+        
+        # Process the log output
+        if daily_summary:
+            daily_commits = defaultdict(list)
+            for line in log_output.split('\n'):
+                if line:
+                    commit_hash, timestamp, message = line.split(',', 2)
+                    date = datetime.fromtimestamp(int(timestamp)).strftime('%Y-%m-%d')
+                    daily_commits[date].append(f"{message} (Commit: {commit_hash})")
+            
+            history = []
+            for date, commits in sorted(daily_commits.items()):
+                history.append(f"{date}:")
+                for commit in commits:
+                    history.append(f"  - {commit}")
+        else:
+            history = []
+            for line in log_output.split('\n'):
+                if line:
+                    commit_hash, timestamp, message = line.split(',', 2)
+                    date = datetime.fromtimestamp(int(timestamp)).strftime('%Y-%m-%d %H:%M:%S')
+                    history.append(f"{date} - {message} (Commit: {commit_hash})")
+        
+        return "\n".join(history)
+    except GitCommandError as e:
+        console.print(f"[red]Error fetching file history: {e}[/red]")
+        return None
+
+
+def get_commit_message(message=None, body=None):
+    api_key = get_api_key(save_if_missing=False)
+    if api_key:
+        use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
+        if use_ai:
+            generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False, days=None, daily_summary=False, filename=None)
+            if generated_message:
+                console.print("[green]AI-generated commit message:[/green]")
+                console.print(generated_message)
+                
+                edit_message = inquirer.confirm(message="Do you want to edit this message?", default=True).execute()
+                if edit_message:
+                    full_commit_message = edit_in_editor(generated_message)
+                else:
+                    full_commit_message = generated_message
+            else:
+                console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
+                full_commit_message = get_manual_commit_message(message, body)
+        else:
+            full_commit_message = get_manual_commit_message(message, body)
+    else:
+        full_commit_message = get_manual_commit_message(message, body)
+    
+    return full_commit_message
 
 
 #
@@ -2202,7 +2164,7 @@ def merge(
                 if api_key:
                     use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
                     if use_ai:
-                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
+                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False, days=None, daily_summary=False, filename=None)
                         if generated_message:
                             console.print("[green]AI-generated commit message:[/green]")
                             console.print(generated_message)
@@ -2436,28 +2398,7 @@ def push(
             ).execute()
 
             if action == "Commit changes":
-                api_key = get_api_key(save_if_missing=False)
-                if api_key:
-                    use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
-                    if use_ai:
-                        generated_message = explain(start_commit=None, end_commit=None, model="gpt-4o", as_command=False)
-                        if generated_message:
-                            console.print("[green]AI-generated commit message:[/green]")
-                            console.print(generated_message)
-                            
-                            edit_message = inquirer.confirm(message="Do you want to edit this message?", default=False).execute()
-                            if edit_message:
-                                full_commit_message = edit_in_editor(generated_message)
-                            else:
-                                full_commit_message = generated_message
-                        else:
-                            console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
-                            full_commit_message = get_manual_commit_message()
-                    else:
-                        full_commit_message = get_manual_commit_message()
-                else:
-                    full_commit_message = get_manual_commit_message()
-
+                full_commit_message = get_commit_message()
                 repo.git.add('.')
                 repo.git.commit('-m', full_commit_message)
                 console.print("[green]Changes committed.[/green]")
