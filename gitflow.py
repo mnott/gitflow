@@ -2057,6 +2057,13 @@ def get_commit_message(message=None, body=None):
     else:
         full_commit_message = get_manual_commit_message(message, body)
     
+    # Final confirmation
+    console.print("[blue]Final commit message:[/blue]")
+    console.print(full_commit_message)
+    confirm = inquirer.confirm(message="Do you want to use this commit message?", default=True).execute()
+    if not confirm:
+        return get_commit_message(message, body)  # Recursively call the function if the user doesn't confirm
+    
     return full_commit_message
 
 
