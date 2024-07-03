@@ -2151,163 +2151,38 @@ def explain(
                 return None
 
             if improve:
-                prompt = f"""
-                Analyze the following file(s) and provide suggestions for improvement.
-                Consider each file's current content, its development history, and best practices
-                for the file's language or purpose.
-
-                Files to analyze:
-                {', '.join(file_contents.keys())}
-
-                For each file, please provide:
-                1. A brief overview of the file's current state and purpose.
-                2. 3-5 specific suggestions for improvement, considering:
-                - Code quality and readability
-                - Performance optimizations
-                - Best practices for the file's language or framework
-                - Potential bugs or security issues
-                - Architecture and design patterns
-                3. Any notable trends or patterns in the file's development history
-                that might inform future improvements.
-
-                {"For each suggestion, provide a specific code example of how to implement the improvement." if examples else ""}
-
-                Format your response as follows:
-                - Start with an overview of each file
-                - List each suggestion with a brief explanation
-                {"- Follow each suggestion with a code example, clearly marked" if examples else ""}
-                - Conclude with insights from the development history
-
-                Important: Be specific and provide actionable suggestions.
-                Explain the rationale behind each suggestion.
-                {"When providing code examples, ensure they are relevant, concise, and clearly illustrate the suggested improvement." if examples else ""}
-
-                File contents and histories:
-                """
-                for file, content in file_contents.items():
-                    prompt += f"\n\n{file} content:\n{content}\n\nHistory:\n{file_histories[file]}"
-
+                prompt = prompt_improve(file_contents, file_histories, examples)
             elif summary:
-                prompt = f"""
-                Provide a high-level summary of what the following file(s) are for.
-                Consider their current content and development history to explain their purpose,
-                main functionalities, and their role within the project.
-
-                Files to summarize:
-                {', '.join(file_contents.keys())}
-
-                For each file, please provide:
-                1. The main purpose of the file
-                2. Key functionalities or components
-                3. How it fits into the overall project structure
-                4. Any significant changes or trends in its development history
-
-                Format your response as a concise yet comprehensive summary for each file.
-
-                Important: Start your response directly with the summary. Do not use
-                any introductory phrases like "Sure," "Here's," or "Certainly."
-
-                File contents and histories:
-                """
-                for file, content in file_contents.items():
-                    prompt += f"\n\n{file} content:\n{content}\n\nHistory:\n{file_histories[file]}"
-
-            elif files:
-                if daily_summary:            
-                    prompt = f"""
-                    Explain the development history of the following file(s) over time.
-                    Provide a summary for each day that had changes, following this structure:
-
-                    1. Date of changes
-                    2. Overall interpretation of the day's changes (purpose, theme, or goal)
-                    3. Brief summary of all changes made that day, including:
-                    - Key modifications
-                    - Overall impact or purpose of the day's changes
-                    - Number of commits
-
-                    Present the history from past to present, highlighting major milestones or significant refactors.
-
-                    Important: Start your response directly with the explanation. Do not use
-                    any introductory phrases like "Sure," "Here's," or "Certainly."
-
-                    Format:
-                    - Use plain text only. No markup language or formatting (except as noted below).
-                    - Limit each line to a maximum of 70 characters.
-                    - Use bullet points (- ) for lists.
-                    - Separate sections with a blank line.
-                    - Do not use asterisks (*) for headlines or emphasis.
-                    - Summarize all changes for each day, don't list individual commits.
-
-                    Example structure:
-
-                    2023-05-25:
-                    Overall: Improved script functionality and documentation
-
-                    - Key changes: Re-enabled regex for scripts, removed dependencies, 
-                    updated documentation
-                    - Impact: Enhanced filtering capabilities, simplified codebase, 
-                    improved maintainability
-                    - Commits: 3
-
-                    Files to explain:
-                    {', '.join(file_contents.keys())}
-
-                    File histories:
-                    """
-                    for file, history in file_histories.items():
-                        prompt += f"\n\n{file} history:\n{history}"
-                else:
-                    prompt = f"""
-                    Explain the development history of the following file(s) over time. 
-                    For each significant change, provide:
-
-                    1. Timestamp of the change
-                    2. Brief description of what was modified
-                    3. The impact or purpose of the change
-                    4. Commit hash (shortened to 7 characters)
-
-                    Present the history from past to present, highlighting major milestones or significant refactors.
-
-                    Important: Start your response directly with the explanation. Do not use
-                    any introductory phrases like "Sure," "Here's," or "Certainly."
-
-                    Format:
-                    - Use plain text only. No markup language or formatting (except as noted below).
-                    - Limit each line to a maximum of 70 characters.
-                    - Use bullet points (- ) for lists.
-                    - Separate sections with a blank line.
-                    - Do not use asterisks (*) for headlines or emphasis.
-                    - If the description is the same as the commit message, do not repeat it.
-
-                    Example structure:
-
-                    2023-05-25 14:30:00: Re-enabled regex for scripts directory
-                    - Impact: Improved script filtering capabilities
-                    - Commit: a48dfba
-
-                    2023-05-25 15:45:00: Removed Obsidian exporter dependency
-                    - Impact: Simplified codebase and reduced external dependencies
-                    - Commit: d402328
-
-                    2023-05-25 16:20:00: Updated documentation
-                    - Impact: Improved user guidance and code maintainability
-                    - Commit: bc32dba
-
-                    Files to explain:
-                    {', '.join(file_contents.keys())}
-
-                    File histories:
-                    """
-                    for file, history in file_histories.items():
-                        prompt += f"\n\n{file} history:\n{history}"
+                prompt = prompt_summary(file_contents, file_histories)
+            elif daily_summary:
+                prompt = prompt_files_daily_summary(file_contents, file_histories)
+            else:
+                prompt = prompt_files_details(file_contents, file_histories)
         else:
             # Determine the diff based on provided commits
             if commit:
                 diff = repo.git.show(f'{commit}^..{commit}')
+            elif days is not None:
+                start = get_first_commit_last_n_days(days)
+                #diff = repo.git.diff(start)
+                command_parts = [
+                    f"{start}..HEAD",
+                    "--pretty=format:'%C(auto)%h %cd'",
+                    "--date=short",
+                    "-p"
+                ]
+                diff = repo.git.log(command_parts)
             elif start and end:
                 diff = repo.git.diff(start, end)
             elif start:
-                diff = repo.git.diff(start)
+                #diff = repo.git.diff(start)
+                command_parts = [
+                    f"{start}..HEAD",
+                    "--pretty=format:'%C(auto)%h %cd'",
+                    "--date=short",
+                    "-p"
+                ]
+                diff = repo.git.log(command_parts)
             else:
                 # Get diff of unstaged changes
                 unstaged_diff = repo.git.diff()
@@ -2316,43 +2191,7 @@ def explain(
                 # Combine unstaged and staged diffs
                 diff = unstaged_diff + "\n" + staged_diff
 
-            prompt = """
-            Generate a concise and meaningful commit message body for the following code changes. Follow these guidelines:
-
-            0. At the very beginning, write a concise headline that summarizes the changes. Use at a maximum 72 characters.
-
-            1. Start with a brief summary (2-3 bullet points) of the high-level changes and intentions.
-
-            2. Then, describe the changes in more detail, grouped by file or related functionality.
-
-            3. Format:
-            - Use plain text only. No markup language or formatting (except as noted below).
-            - Limit each line to a maximum of 70 characters.
-            - Use bullet points (- ) for lists.
-            - Separate sections with a blank line.
-            - Do not use asterics (*) for headlines or emphasis.
-
-            4. Code references:
-            - Minimize code blocks. Only use them for critical, short snippets.
-            - When necessary, place code on its own line, indented by 2 spaces.
-            - For function or class names, use single backticks (e.g., `function_name`).
-
-            5. Focus on conveying the meaning and impact of the changes, not just listing them.
-
-            6. If changes span multiple branches, organize the description by branch.
-
-            7. Aim for a comprehensive yet concise message. Don't omit important details, but also avoid unnecessary verbosity.
-
-            8. Remember, no line is to exceed 70 characters in length.
-
-            9. Really remember, no line is to exceed 70 characters in length. Do an extra check for this.
-
-            Remember, the goal is to create a clear, informative commit message that future developers
-            (including yourself) will find helpful when reviewing the project history.
-
-            Changes:
-            """
-            prompt += diff[:100000]  # Truncated for API limits
+            prompt = prompt_commit(diff)
 
         if custom_prompt:
             prompt += f"\n\nAdditional instructions: \n{custom_prompt}"
@@ -2389,6 +2228,208 @@ def explain(
     except Exception as e:
         console.print(f"[red]Error generating explanation: {e}[/red]")
         return None
+
+
+def prompt_improve(file_contents, file_histories, examples):
+    prompt = f"""
+    Analyze the following file(s) and provide suggestions for improvement.
+    Consider each file's current content, its development history, and best practices
+    for the file's language or purpose.
+
+    Files to analyze:
+    {', '.join(file_contents.keys())}
+
+    For each file, please provide:
+    1. A brief overview of the file's current state and purpose.
+    2. 3-5 specific suggestions for improvement, considering:
+    - Code quality and readability
+    - Performance optimizations
+    - Best practices for the file's language or framework
+    - Potential bugs or security issues
+    - Architecture and design patterns
+    3. Any notable trends or patterns in the file's development history
+    that might inform future improvements.
+
+    {"For each suggestion, provide a specific code example of how to implement the improvement." if examples else ""}
+
+    Format your response as follows:
+    - Start with an overview of each file
+    - List each suggestion with a brief explanation
+    {"- Follow each suggestion with a code example, clearly marked" if examples else ""}
+    - Conclude with insights from the development history
+
+    Important: Be specific and provide actionable suggestions.
+    Explain the rationale behind each suggestion.
+    {"When providing code examples, ensure they are relevant, concise, and clearly illustrate the suggested improvement." if examples else ""}
+
+    File contents and histories:
+    """
+    for file, content in file_contents.items():
+        prompt += f"\n\n{file} content:\n{content}\n\nHistory:\n{file_histories[file]}"
+    return prompt
+
+
+def prompt_summary(file_contents, file_histories):
+    prompt = f"""
+    Provide a high-level summary of what the following file(s) are for.
+    Consider their current content and development history to explain their purpose,
+    main functionalities, and their role within the project.
+
+    Files to summarize:
+    {', '.join(file_contents.keys())}
+
+    For each file, please provide:
+    1. The main purpose of the file
+    2. Key functionalities or components
+    3. How it fits into the overall project structure
+    4. Any significant changes or trends in its development history
+
+    Format your response as a concise yet comprehensive summary for each file.
+
+    Important: Start your response directly with the summary. Do not use
+    any introductory phrases like "Sure," "Here's," or "Certainly."
+
+    File contents and histories:
+    """
+    for file, content in file_contents.items():
+        prompt += f"\n\n{file} content:\n{content}\n\nHistory:\n{file_histories[file]}"
+    return prompt
+
+
+def prompt_files_daily_summary(file_contents, file_histories):
+    prompt = f"""
+    Explain the development history of the following file(s) over time.
+    Provide a summary for each day that had changes, following this structure:
+
+    1. Date of changes
+    2. Overall interpretation of the day's changes (purpose, theme, or goal)
+    3. Brief summary of all changes made that day, including:
+    - Key modifications
+    - Overall impact or purpose of the day's changes
+    - Number of commits
+
+    Present the history from past to present, highlighting major milestones or significant refactors.
+
+    Important: Start your response directly with the explanation. Do not use
+    any introductory phrases like "Sure," "Here's," or "Certainly."
+
+    Format:
+    - Use plain text only. No markup language or formatting (except as noted below).
+    - Limit each line to a maximum of 70 characters.
+    - Use bullet points (- ) for lists.
+    - Separate sections with a blank line.
+    - Do not use asterisks (*) for headlines or emphasis.
+    - Summarize all changes for each day, don't list individual commits.
+
+    Example structure:
+
+    2023-05-25:
+    Overall: Improved script functionality and documentation
+
+    - Key changes: Re-enabled regex for scripts, removed dependencies, 
+    updated documentation
+    - Impact: Enhanced filtering capabilities, simplified codebase, 
+    improved maintainability
+    - Commits: 3
+
+    Files to explain:
+    {', '.join(file_contents.keys())}
+
+    File histories:
+    """
+    for file, history in file_histories.items():
+        prompt += f"\n\n{file} history:\n{history}"
+    return prompt
+
+
+def prompt_files_details(file_contents, file_histories):
+    prompt = f"""
+    Explain the development history of the following file(s) over time. 
+    For each significant change, provide:
+
+    1. Timestamp of the change
+    2. Brief description of what was modified
+    3. The impact or purpose of the change
+    4. Commit hash (shortened to 7 characters)
+
+    Present the history from past to present, highlighting major milestones or significant refactors.
+
+    Important: Start your response directly with the explanation. Do not use
+    any introductory phrases like "Sure," "Here's," or "Certainly."
+
+    Format:
+    - Use plain text only. No markup language or formatting (except as noted below).
+    - Limit each line to a maximum of 70 characters.
+    - Use bullet points (- ) for lists.
+    - Separate sections with a blank line.
+    - Do not use asterisks (*) for headlines or emphasis.
+    - If the description is the same as the commit message, do not repeat it.
+
+    Example structure:
+
+    2023-05-25 14:30:00: Re-enabled regex for scripts directory
+    - Impact: Improved script filtering capabilities
+    - Commit: a48dfba
+
+    2023-05-25 15:45:00: Removed Obsidian exporter dependency
+    - Impact: Simplified codebase and reduced external dependencies
+    - Commit: d402328
+
+    2023-05-25 16:20:00: Updated documentation
+    - Impact: Improved user guidance and code maintainability
+    - Commit: bc32dba
+
+    Files to explain:
+    {', '.join(file_contents.keys())}
+
+    File histories:
+    """
+    for file, history in file_histories.items():
+        prompt += f"\n\n{file} history:\n{history}"
+    return prompt
+
+
+def prompt_commit(diff):
+    prompt = """
+    Generate a concise and meaningful commit message body for the following code changes. Follow these guidelines:
+
+    0. At the very beginning, write a concise headline that summarizes the changes. Use at a maximum 72 characters.
+
+    1. Start with a brief summary (2-3 bullet points) of the high-level changes and intentions.
+
+    2. Then, describe the changes in more detail, grouped by file or related functionality.
+
+    3. Format:
+    - Use plain text only. No markup language or formatting (except as noted below).
+    - Limit each line to a maximum of 70 characters.
+    - Use bullet points (- ) for lists.
+    - Separate sections with a blank line.
+    - Do not use asterics (*) for headlines or emphasis.
+
+    4. Code references:
+    - Minimize code blocks. Only use them for critical, short snippets.
+    - When necessary, place code on its own line, indented by 2 spaces.
+    - For function or class names, use single backticks (e.g., `function_name`).
+
+    5. Focus on conveying the meaning and impact of the changes, not just listing them.
+
+    6. If changes span multiple branches, organize the description by branch.
+
+    7. Aim for a comprehensive yet concise message. Don't omit important details, but also avoid unnecessary verbosity.
+
+    8. Remember, no line is to exceed 70 characters in length.
+
+    9. Really remember, no line is to exceed 70 characters in length. Do an extra check for this.
+
+    Remember, the goal is to create a clear, informative commit message that future developers
+    (including yourself) will find helpful when reviewing the project history.
+
+    Changes:
+    """
+    prompt += diff[:100000]  # Truncated for API limits
+    return prompt
+
+
 
 def edit_in_editor(initial_message):
     # Create a temporary file
@@ -2450,6 +2491,36 @@ def get_file_history(filename, days=None, daily_summary=False):
     except GitCommandError as e:
         console.print(f"[yellow]Warning: Error fetching file history: {e}[/yellow]")
         return None
+
+
+def get_first_commit_last_n_days(n_days, hash_length=8):
+    # Adjust start_date to the beginning of the day, n_days ago
+    start_date = (datetime.now() - timedelta(days=n_days)).replace(hour=0, minute=0, second=0, microsecond=0)
+    start_date_str = start_date.strftime('%Y-%m-%d')
+
+    commits = list(repo.iter_commits(since=start_date_str))
+
+    first_commit_of_day = None
+    last_commit_processed = None  # Variable to keep track of the last commit processed
+    for commit in commits:
+        commit_date = datetime.fromtimestamp(commit.committed_date)
+        # Update last_commit_processed on each iteration
+        last_commit_processed = commit
+        # Check if commit_date is on the specified start_date
+        if (commit_date - timedelta(days=1)).date() == start_date.date():
+            if first_commit_of_day is None or commit.committed_date < first_commit_of_day.committed_date:
+                first_commit_of_day = commit
+
+    if first_commit_of_day:
+        return(first_commit_of_day.hexsha[:hash_length])
+    else:
+        # Use the last commit processed if no commit was found for the specified day
+        if last_commit_processed:
+            #print(f"No commit found for the specified day. Using last commit found: {last_commit_processed.hexsha[:hash_length]}")
+            return(last_commit_processed.hexsha[:hash_length])
+        else:
+            print("No commits found.")
+            return None
 
 
 def get_commit_message(message=None, body=None):
