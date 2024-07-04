@@ -559,54 +559,66 @@ def split_message_body(body: str) -> str:
 
 
 #
-# Helper Function to get the API Key
+# Get some metadata from the .git/config file.
 #
-def get_api_key(save_if_missing=True):
+def get_git_metadata(key: str) -> Optional[str]:
     try:
-        api_key = subprocess.check_output(["git", "config", "--get", "openai.apikey"], universal_newlines=True).strip()
-        return api_key
+        value = subprocess.check_output(["git", "config", "--get", key], universal_newlines=True).strip()
+        return value
     except subprocess.CalledProcessError:
-        if save_if_missing:
-            console.print("[yellow]OpenAI API key not found in git config.[/yellow]")
-            api_key = inquirer.secret(message="Enter your OpenAI API key:").execute()
-            
-            try:
-                subprocess.run(["git", "config", "--local", "openai.apikey", api_key], check=True)
-                console.print("[green]OpenAI API key saved successfully.[/green]")
-                return api_key
-            except subprocess.CalledProcessError as e:
-                console.print(f"[red]Failed to save OpenAI API key: {e}[/red]")
-                return None
-        else:
-            return None
+        return None
 
 
 #
-# Configure the API Key
+# Set some metadata in the .git/config file.
+#
+def set_git_metadata(key: str, value: str):
+    try:
+        subprocess.run(["git", "config", "--local", key, value], check=True)
+        console.print(f"[green]{key} saved successfully.[/green]")
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Failed to save {key}: {e}[/red]")
+
+
+#
+# Configure the API Key and Model
 #
 @app.command()
 def config_ai(
-    api_key: Optional[str] = typer.Option(None, "--api-key", help="Your OpenAI API key")
+    api_key: Optional[str] = typer.Option(None, "--api-key", help="Your OpenAI API key"),
+    model  : Optional[str] = typer.Option(None, "--model",   help="Your OpenAI Model")
 ):
     """
-    Configure API Key
+    Configure the OpenAI API key and model for the gitflow script.
+
+    Args:
+        api_key (str, optional): Your OpenAI API key. Defaults to None.
+        model   (str, optional): Your OpenAI Model. Defaults to None.
     """
-    # Configure OpenAI API key
     if api_key is None:
-        existing_api_key = get_api_key(save_if_missing=False)
+        existing_api_key = get_git_metadata("openai.apikey")
+        
         if existing_api_key:
             overwrite = inquirer.confirm(message="An API key already exists. Do you want to overwrite it?", default=False).execute()
             if not overwrite:
                 console.print("[yellow]Keeping existing API key.[/yellow]")
+            else:
+                api_key = inquirer.secret(message="Enter your OpenAI API key:").execute()
+                
+    if api_key is not None:                
+        set_git_metadata("openai.apikey", api_key)
+    
+    if model is None:
+        existing_model = get_git_metadata("openai.model")
+        if existing_model:
+            overwrite = inquirer.confirm(message="An API model already exists. Do you want to overwrite it?", default=False).execute()
+            if not overwrite:
+                console.print("[yellow]Keeping existing API Model.[/yellow]")
                 return
-        api_key = inquirer.secret(message="Enter your OpenAI API key:").execute()
+        model = inquirer.text(message="Enter your OpenAI Model key:").execute()
 
-    try:
-        subprocess.run(["git", "config", "--local", "openai.apikey", api_key], check=True)
-        console.print("[green]OpenAI API key saved successfully.[/green]")
-    except subprocess.CalledProcessError as e:
-        console.print(f"[red]Failed to save OpenAI API key: {e}[/red]")
-        raise typer.Exit()
+    if model is not None:
+        set_git_metadata("openai.model", model)
 
 
 #
@@ -2029,7 +2041,7 @@ def commit(
             console.print("[yellow]No changes to commit.[/yellow]")
             return
 
-        api_key = get_api_key(save_if_missing=False)
+        api_key = get_git_metadata("openai.apikey")
         if api_key and (interactive or not message):
             full_commit_message = get_commit_message(message, body)
         else:
@@ -2072,7 +2084,6 @@ def explain(
     commit:        Optional[str] = typer.Option  (None,  "-c", "--commit",   help="If we are to analyze only one given commit hash."),
     start:         Optional[str] = typer.Option  (None,  "-s", "--start",    help="Starting commit hash."),
     end:           Optional[str] = typer.Option  (None,  "-e", "--end",      help="Ending commit hash. If not provided, uses HEAD."),
-    model:         str           = typer.Option  ("gpt-4o",                  help="AI model to use"),
     days:          Optional[int] = typer.Option  (None,  "-d", "--days",     help="Number of days to look back in history"),
     daily_summary: bool          = typer.Option  (False,       "--daily",    help="Provide a summary on a daily basis instead of per commit"),
     summary:       bool          = typer.Option  (False,       "--summary",  help="Provide a high-level summary of what the file is for"),
@@ -2112,10 +2123,15 @@ def explain(
         ./gitflow.py explain path/to/file1.py --prompt "Focus on performance improvements"      
     """
     try:
-        api_key = get_api_key()
+        api_key = get_git_metadata("openai.apikey")
         if not api_key:
             console.print("[red]Failed to get OpenAI API key. Cannot generate explanation.[/red]")
             return None
+        
+        model = get_git_metadata("openai.model")
+        if not model:
+            console.print("[red]Failed to get OpenAI API model. Cannot generate explanation.[/red]")
+            return None        
         
         if files:
             file_contents = {}
@@ -2524,11 +2540,11 @@ def get_first_commit_last_n_days(n_days, hash_length=8):
 
 
 def get_commit_message(message=None, body=None):
-    api_key = get_api_key(save_if_missing=False)
+    api_key = get_git_metadata("openai.apikey")
     if api_key:
         use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
         if use_ai:
-            generated_message = explain(files=None, commit=None, start=None, end=None, model="gpt-4o", as_command=False, days=None, daily_summary=False, summary=False, improve=False, custom_prompt=None, examples=False)
+            generated_message = explain(files=None, commit=None, start=None, end=None, as_command=False, days=None, daily_summary=False, summary=False, improve=False, custom_prompt=None, examples=False)
             if generated_message:
                 console.print("[green]AI-generated commit message:[/green]")
                 console.print(generated_message)
@@ -2673,11 +2689,11 @@ def merge(
             ).execute()
 
             if action == "Commit changes":
-                api_key = get_api_key(save_if_missing=False)
+                api_key = get_git_metadata("openai.apikey")
                 if api_key:
                     use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
                     if use_ai:
-                        generated_message = explain(files=None, commit=None, start=None, end=None, model="gpt-4o", as_command=False, days=None, daily_summary=False, summary=False, improve=False, custom_prompt=None, examples=False)
+                        generated_message = explain(files=None, commit=None, start=None, end=None, as_command=False, days=None, daily_summary=False, summary=False, improve=False, custom_prompt=None, examples=False)
                         if generated_message:
                             console.print("[green]AI-generated commit message:[/green]")
                             console.print(generated_message)
