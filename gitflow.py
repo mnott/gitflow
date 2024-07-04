@@ -525,11 +525,29 @@ class GitWrapper:
             current_branch = self.repo.active_branch.name
             if current_branch == branch:
                 self.repo.git.checkout('develop')
-            self.repo.git.branch('-D', branch)
-            console.print(f"[green]Deleted local branch {branch}[/green]")
+
+            # Check if local branch exists before trying to delete it
+            if branch in [b.name for b in self.repo.branches]:
+                self.repo.git.branch('-D', branch)
+                console.print(f"[green]Deleted local branch {branch}[/green]")
+            else:
+                pass
+                # This error might just mean we've already deleted the branch
+                # e.g. when multi selecting branches to delete
+                # console.print(f"[yellow]Local branch {branch} not found. Skipping local deletion.[/yellow]")
+
             if delete_remote and self.check_network_connection():
-                self.repo.git.push('origin', '--delete', branch)
-                console.print(f"[green]Deleted remote branch {branch}[/green]")
+                try:
+                    self.repo.git.push('origin', '--delete', branch)
+                    console.print(f"[green]Deleted remote branch {branch}[/green]")
+                except GitCommandError as e:
+                    if "remote ref does not exist" in str(e):
+                        pass
+                        # This error might just mean we've already deleted the branch
+                        # e.g. when multi selecting branches to delete
+                        # console.print(f"[yellow]Remote branch {branch} not found. Skipping remote deletion.[/yellow]")
+                    else:
+                        raise
         except GitCommandError as e:
             console.print(f"[yellow]Could not delete branch {branch}: {e}[/yellow]")
 
@@ -825,7 +843,7 @@ def config(
 #
 @app.command()
 def start(
-    name: str = typer.Argument(..., help="Specify the feature, local, hotfix, release, or backup name"),
+    name: Optional[str] = typer.Argument(None, help="Specify the feature, local, hotfix, release, or backup name"),
     branch_type: str = typer.Option("local", "-t", "--type", help="Specify the branch type: local, hotfix, feature, release, or backup"),
     week: Optional[int] = typer.Option(None, "-w", "--week", help="Specify the calendar week"),
     increment: str = typer.Option("patch", "-i", "--increment", help="Specify the version increment type: major, minor, patch"),
@@ -839,7 +857,7 @@ def start(
     Otherwise, create a weekly update hotfix branch.
 
     Parameters:
-    - name       : The name of the feature, hotfix, or release branch.
+    - name       : The name of the feature, hotfix, or release branch. Optional for hotfix branches.
     - branch_type: The type of branch to create ('local', 'hotfix', 'feature', or 'release').
     - week       : The calendar week for a weekly hotfix branch.
     - increment  : The version increment type for release branches ('major', 'minor', or 'patch').
@@ -852,20 +870,20 @@ def start(
 
     version_tag = None
     existing_tags = [tag.name for tag in repo.tags]
-    if name and branch_type != "release":
+
+    if branch_type == "hotfix" and name is None:
+        week_number = get_week_number(week)
+        name = f"week-{week_number}"
+
+    if name:
         if branch_type == "local":
             branch_name = name
         else:
             branch_name = f"{branch_type}/{name}"
-    elif branch_type == "hotfix":
-        week_number = get_week_number(week)
-        branch_name = f"hotfix/week-{week_number}"
     elif branch_type == "release":
         version_tag = get_next_semver(increment, existing_tags)
         print(f"Next version tag: {version_tag}")
-        if name is None:
-            name = version_tag
-        branch_name = f"release/{name}"
+        branch_name = f"release/{version_tag}"
     else:
         console.print("[red]Error: A feature or release branch must have a name[/red]")
         return
@@ -1467,154 +1485,91 @@ def checkout(
 #
 @app.command()
 def rm(
-    branch_name: Optional[str] = typer.Argument(None,                   help="The branch name to delete"),
-    force:       bool          = typer.Option  (False, "-f", "--force", help="Force delete the branch, even if it's not fully merged or has open pull requests"),
-    all:         bool          = typer.Option  (False, "-a", "--all",   help="Delete both local and remote branches with the same name")
+    branch_names: Optional[List[str]] = typer.Argument(None, help="The branch name(s) to delete"),
+    force: bool = typer.Option(False, "-f", "--force", help="Force delete the branch, even if it's not fully merged or has open pull requests"),
+    all: bool = typer.Option(False, "-a", "--all", help="Delete both local and remote branches with the same name")
 ):
     """
-    Delete a branch using an interactive menu or by specifying the branch name.
-
-    Parameters:
-    - branch_name: The branch name to delete.
-    - force      : Force delete the branch, even if it's not fully merged or has open pull requests.
-    - all        : Delete both local and remote branches with the same name.
-
-    Examples:
-    - Delete a branch using a menu:
-        ./gitflow.py rm
-    - Delete a specific branch:
-        ./gitflow.py rm feature/old-feature
-    - Force delete a branch (local or remote):
-        ./gitflow.py rm feature/old-feature -f
-    - Delete both local and remote branches with the same name:
-        ./gitflow.py rm -a
+    Delete one or more branches using an interactive menu or by specifying the branch names.
     """
-    if not check_network_connection():
+    if not git_wrapper.check_network_connection():
         console.print("[yellow]Warning: No network connection. Only local operations will be performed.[/yellow]")
         all = False  # Disable remote operations
 
-    if check_network_connection():
+    if git_wrapper.check_network_connection():
         # Update local and remote references
         repo.git.fetch('--all')
         repo.git.remote('prune', 'origin')
 
-    local_branches = [head.name for head in repo.heads]
+    local_branches = [head.name for head in repo.heads if head.name not in ['develop', 'main']]
     remote_branches = []
-    if check_network_connection():
-        remote_branches = [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
+    if git_wrapper.check_network_connection():
+        remote_branches = [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs
+                           if ref.name != 'origin/HEAD' and ref.name.replace('origin/', '') not in ['develop', 'main']]
 
-    if not branch_name:
+    if not branch_names:
         all_branches = [f"Local: {branch}" for branch in local_branches]
-        if check_network_connection():
+        if git_wrapper.check_network_connection():
             all_branches += [f"Remote: {branch}" for branch in remote_branches]
-        branch_name = inquirer.select(message="Select a branch to delete:", choices=all_branches).execute()
 
-    if "Local: " in branch_name:
-        branch_name = branch_name.replace("Local: ", "")
-        delete_local = True
-        delete_remote = False
-    elif "Remote: " in branch_name:
-        branch_name = branch_name.replace("Remote: ", "")
-        delete_local = False
-        delete_remote = True
-    else:
-        delete_local = True
-        delete_remote = all and check_network_connection()
+        selected_branches = inquirer.checkbox(
+            message="Select branch(es) to delete:",
+            choices=all_branches
+        ).execute()
 
-    if branch_name in ['develop', 'main']:
-        console.print("[red]Error: You cannot delete the develop or main branches.[/red]")
-        return
-
-    if branch_name == repo.active_branch.name:
-        console.print("[yellow]Switching to 'develop' branch before deletion.[/yellow]")
-        try:
-            # Check for unstaged changes
-            if repo.is_dirty(untracked_files=True):
-                console.print("[yellow]You have unstaged changes.[/yellow]")
-                action = inquirer.select(
-                    message="How would you like to proceed?",
-                    choices=[
-                        "Commit changes",
-                        "Stash changes",
-                        "Continue without committing",
-                        "Abort"
-                    ]
-                ).execute()
-
-                if action == "Commit changes":
-                    full_commit_message = get_commit_message()
-                    repo.git.add('.')
-                    repo.git.commit('-m', full_commit_message)
-                    console.print("[green]Changes committed.[/green]")
-                elif action == "Stash changes":
-                    repo.git.stash('save', f"Stashed changes before switching to 'develop'")
-                    console.print("[green]Changes stashed.[/green]")
-                elif action == "Abort":
-                    console.print("[yellow]Delete operation aborted.[/yellow]")
-                    return
-                # If "Continue without committing" is selected, we just proceed
-
-            repo.git.checkout('develop')
-            console.print("[green]Switched to 'develop' branch.[/green]")
-        except GitCommandError as e:
-            console.print(f"[red]Error switching to 'develop' branch: {e}[/red]")
+        if not selected_branches:
+            console.print("[yellow]No branches selected. Operation aborted.[/yellow]")
             return
+    else:
+        selected_branches = branch_names
 
-    def check_prs(branch_name: str):
-        if not check_network_connection():
-            console.print("[yellow]Cannot check for open pull requests due to no network connection.[/yellow]")
-            return False
-        result = subprocess.run(
-            ["gh", "pr", "list", "--head", branch_name, "--state", "open", "--json", "number"],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            prs = result.stdout.strip()
-            return prs != "[]"
+    for branch in selected_branches:
+        if "Local: " in branch:
+            branch_name = branch.replace("Local: ", "")
+            delete_local = True
+            delete_remote = False
+        elif "Remote: " in branch:
+            branch_name = branch.replace("Remote: ", "")
+            delete_local = False
+            delete_remote = True
         else:
-            console.print(f"[red]Error checking pull requests: {result.stderr}[/red]")
-            return True
+            branch_name = branch
+            delete_local = True
+            delete_remote = all and git_wrapper.check_network_connection()
 
-    def delete_branch(branch_name: str, delete_local: bool, delete_remote: bool):
-        if delete_local and branch_name in local_branches:
-            try:
-                repo.git.branch('-d' if not force else '-D', branch_name)
-                console.print(f"[green]Deleted local branch {branch_name}[/green]")
-                local_branches.remove(branch_name)  # Remove from list after successful deletion
-            except GitCommandError as e:
-                console.print(f"[red]Error deleting local branch {branch_name}: {e}[/red]")
+        if branch_name in ['develop', 'main']:
+            console.print(f"[red]Error: You cannot delete the {branch_name} branch. Skipping.[/red]")
+            continue
 
-        if delete_remote and branch_name in remote_branches and check_network_connection():
-            # Verify if the branch actually exists on the remote
-            remote_branches_actual = [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs]
-            if branch_name in remote_branches_actual:
-                has_open_prs = check_prs(branch_name)
-                if has_open_prs and not force:
-                    console.print(f"[yellow]There are open pull requests for the branch {branch_name}. Use -f to force delete the remote branch.[/yellow]")
-                else:
-                    if has_open_prs:
-                        console.print(f"[yellow]Warning: Deleting remote branch {branch_name} with open pull requests.[/yellow]")
-                    try:
-                        repo.git.push('origin', '--delete', branch_name)
-                        console.print(f"[green]Deleted remote branch {branch_name}[/green]")
-                        remote_branches.remove(branch_name)  # Remove from list after successful deletion
-                    except GitCommandError as e:
-                        console.print(f"[red]Error deleting remote branch {branch_name}: {e}[/red]")
-            else:
-                console.print(f"[red]Error: Remote branch {branch_name} does not exist[/red]")
+        if delete_remote and check_prs(branch_name) and not force:
+            console.print(f"[yellow]There are open pull requests for the branch {branch_name}. Use -f to force delete the remote branch. Skipping.[/yellow]")
+            continue
 
-    try:
-        delete_branch(branch_name, delete_local, delete_remote)
+        git_wrapper.delete_branch(branch_name, delete_remote=delete_remote)
 
-        # If the -a flag is specified, delete both local and remote branches with the same name
-        if all:
-            if branch_name in local_branches:
-                delete_branch(branch_name, True, False)
-            if branch_name in remote_branches and check_network_connection():
-                delete_branch(branch_name, False, True)
+    # Switch to develop branch if current branch was deleted
+    if repo.active_branch.name not in local_branches + ['develop', 'main']:
+        repo.git.checkout('develop')
+        console.print("[green]Switched to 'develop' branch.[/green]")
 
-    except GitCommandError as e:
-        console.print(f"[red]Error: {e}[/red]")
+
+def check_prs(branch_name: str):
+    if not git_wrapper.check_network_connection():
+        console.print("[yellow]Cannot check for open pull requests due to no network connection.[/yellow]")
+        return False
+    result = subprocess.run(
+        ["gh", "pr", "list", "--head", branch_name, "--state", "open", "--json", "number"],
+        capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        prs = result.stdout.strip()
+        return prs != "[]"
+    else:
+        console.print(f"[red]Error checking pull requests: {result.stderr}[/red]")
+        return True
+
+
+
 
 
 #
