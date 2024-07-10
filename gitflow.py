@@ -931,7 +931,7 @@ def start(
 #
 @app.command()
 def finish(
-    delete:     bool = typer.Option(True,  "-d", "--delete",     help="Delete the branch after finishing"),
+    delete: bool = typer.Option(True, "-d", "--delete", help="Delete the branch after finishing"),
     keep_local: bool = typer.Option(False, "-k", "--keep-local", help="Keep the local branch after finishing")
 ):
     """
@@ -973,6 +973,15 @@ def finish(
             return
 
         target_branches = ["main", "develop"] if branch_type in ["hotfix", "release"] else ["develop"]
+
+        # For release branches, push the tag before merging
+        if branch_type == 'release' and not offline:
+            tag_name = current_branch.split('/')[-1]
+            try:
+                repo.git.push('origin', tag_name)
+                console.print(f"[green]Pushed tag {tag_name} to remote[/green]")
+            except GitCommandError as e:
+                console.print(f"[yellow]Warning: Failed to push tag {tag_name}. Error: {e}[/yellow]")
 
         merge_successful = all(git_wrapper.merge_to_target(current_branch, target) for target in target_branches)
 
