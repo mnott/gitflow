@@ -1,4 +1,4 @@
-# gf
+# gitflow
 
 # Gitflow: A Git Wrapper for Release and Branch Management
 
@@ -58,6 +58,29 @@ To get help about the script, call it with the `--help` option:
 ./gitflow.py --help
 ```
 
+## Starting and Finishing Branches
+
+### Starting a Branch
+
+To start a new local, feature, hotfix, or release branch, run:
+
+```bash
+./gitflow.py start ...
+```
+
+The options are explained further below.
+
+### Finishing a Branch
+
+Any branch type can be finished by
+
+a) Making sure you are on the branch you want to finish (use `checkout`)
+b) Running:
+
+```bash
+./gitflow.py finish
+```
+
 
 ## Hotfix Branches
 
@@ -73,47 +96,24 @@ in particular.
 
 Weekly Update Hotfix Branches are used for minor weekly updates.
 
-#### Start a Weekly Update Hotfix Branch
-
 To start a new weekly update hotfix branch, run:
 
 ```bash
-./gitflow.py start
+./gitflow.py start -t hotfix
 ```
 
-#### Finish a Weekly Update Hotfix Branch
+Because you are not giving an explicit name, it is going to use the current week
+as a branch name.
 
-To finish a weekly update hotfix branch, run:
-
-```bash
-./gitflow.py finish
-```
-
-
-### Hotfix Branches
-
-#### Start a Hotfix Branch
+### Start a Hotfix Branch
 
 To start a new hotfix branch, run:
 
 ```bash
-./gitflow.py start -t hotfix -n "critical-bugfix" -m "Starting critical bugfix hotfix"
+./gitflow.py start -t hotfix critical-bugfix
 ```
 
-#### Finish a Hotfix Branch
-
-To finish a hotfix branch, run:
-
-```bash
-./gitflow.py finish -t hotfix -n "critical-bugfix" -m "Finishing critical bugfix hotfix"
-```
-
-In case you have a release branch open, you can specify the target branch to merge the
-hotfix into:
-
-```bash
-./gitflow.py finish -t hotfix -n "critical-bugfix" -m "Finishing critical bugfix hotfix" -tb "release/v1.4.5"
-```
+This will start a branch `hotfix/critical-bugfix` and switch to it.
 
 
 ## Feature Branches
@@ -122,22 +122,11 @@ Feature branches are used to develop new features. According to the GitFlow bran
 model, feature branches are created from the develop branch and merged back into the
 develop branch.
 
-### Start a Feature Branch
-
 To start a new feature branch, run:
 
 ```bash
-./gitflow.py start -t feature -n "new-feature" -m "Starting new feature"
+./gitflow.py start -t feature new-feature
 ```
-
-### Finish a Feature Branch
-
-To finish a feature branch, run:
-
-```bash
-./gitflow.py finish -t feature -n "new-feature" -m "Finishing new feature"
-```
-
 
 ## Release Branches
 
@@ -145,28 +134,19 @@ Release branches are used to prepare a new release. According to the GitFlow bra
 model, release branches are created from the develop branch and merged back into both
 the main and develop branches.
 
-### Start a Release Branch
-
 To start a new release branch, run:
 
 ```bash
-./gitflow.py start -t release -m "Starting release" -i "patch"
-```
-
-### Finish a Release Branch
-
-To finish a release branch, run:
-
-```bash
-./gitflow.py finish -t release -n "v1.4.5" -m "Finishing release"
+./gitflow.py start -t release -i "patch"
 ```
 
 Should you have made last minute updates to the release branch, you can update the
 release branch by merging it back into the develop branch:
 
 ```bash
-./gitflow.py update -n "1.2.0" -m "Merging bug fixes from release 1.2.0"
+./gitflow.py update
 ```
+
 
 ## Other Commands
 
@@ -185,6 +165,8 @@ To switch to a different branch using an interactive menu, run:
 ```bash
 ./gitflow.py checkout <branch_name>
 ```
+
+If you do not give a branch name, you will be presented with an interactive menu.
 
 ### Add Files to Git
 
