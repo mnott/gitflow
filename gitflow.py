@@ -843,12 +843,12 @@ def config(
 #
 @app.command()
 def start(
-    name: Optional[str] = typer.Argument(None, help="Specify the feature, local, hotfix, release, or backup name"),
-    branch_type: str = typer.Option("local", "-t", "--type", help="Specify the branch type: local, hotfix, feature, release, or backup"),
-    week: Optional[int] = typer.Option(None, "-w", "--week", help="Specify the calendar week"),
-    increment: str = typer.Option("patch", "-i", "--increment", help="Specify the version increment type: major, minor, patch"),
-    message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message"),
-    skip_switch: bool = typer.Option(False, "-s", "--skip-switch", help="Skip switching to main or develop branch before creating the new branch")
+    name:         Optional[str] = typer.Argument(None,                         help="Specify the feature, local, hotfix, release, or backup name"),
+    branch_type:            str = typer.Option("local", "-t", "--type",        help="Specify the branch type: local, hotfix, feature, release, or backup"),
+    week:         Optional[int] = typer.Option(None,    "-w", "--week",        help="Specify the calendar week"),
+    increment:              str = typer.Option("patch", "-i", "--increment",   help="Specify the version increment type: major, minor, patch"),
+    message:      Optional[str] = typer.Option(None,    "-m", "--message",     help="Specify a commit message"),
+    skip_switch:           bool = typer.Option(False,   "-s", "--skip-switch", help="Skip switching to main or develop branch before creating the new branch")
 ):
     """
     Start a new feature, hotfix, or release branch.
@@ -938,7 +938,7 @@ def start(
 #
 @app.command()
 def finish(
-    delete: bool = typer.Option(True, "-d", "--delete", help="Delete the branch after finishing"),
+    delete:     bool = typer.Option(True,  "-d", "--delete",     help="Delete the branch after finishing"),
     keep_local: bool = typer.Option(False, "-k", "--keep-local", help="Keep the local branch after finishing")
 ):
     """
@@ -2951,7 +2951,7 @@ def push(
             # Check if there are differences between local and remote
             changes_made = False
             try:
-                print(f"Checking differences between {branch} and origin/{branch}")
+                print(f"[blue]Checking differences between {branch} and origin/{branch}[/blue]")
                 ahead_behind = repo.git.rev_list('--left-right', '--count', f'origin/{branch}...HEAD').split()
                 behind = int(ahead_behind[0])
                 ahead = int(ahead_behind[1])
