@@ -75,8 +75,8 @@ The options are explained further below.
 
 Any branch type can be finished by
 
-a) Making sure you are on the branch you want to finish (use `checkout`)
-b) Running:
+- Making sure you are on the branch you want to finish (use `checkout`)
+- Running:
 
 ```bash
 ./gitflow.py finish
