@@ -79,12 +79,12 @@ Weekly Update Hotfix Branches are used for minor weekly updates.
 To start a new weekly update hotfix branch, run:
 
 ```bash
-./gitflow.py start
+./gitflow.py start -t hotfix
 ```
 
 #### Finish a Weekly Update Hotfix Branch
 
-To finish a weekly update hotfix branch, run:
+To finish a weekly update hotfix branch, make sure you are on the branch, then run:
 
 ```bash
 ./gitflow.py finish
@@ -98,22 +98,15 @@ To finish a weekly update hotfix branch, run:
 To start a new hotfix branch, run:
 
 ```bash
-./gitflow.py start -t hotfix -n "critical-bugfix" -m "Starting critical bugfix hotfix"
+./gitflow.py start -t hotfix critical-bugfix
 ```
 
 #### Finish a Hotfix Branch
 
-To finish a hotfix branch, run:
+To finish a hotfix branch, make sure you are on the branch, then run:
 
 ```bash
-./gitflow.py finish -t hotfix -n "critical-bugfix" -m "Finishing critical bugfix hotfix"
-```
-
-In case you have a release branch open, you can specify the target branch to merge the
-hotfix into:
-
-```bash
-./gitflow.py finish -t hotfix -n "critical-bugfix" -m "Finishing critical bugfix hotfix" -tb "release/v1.4.5"
+./gitflow.py finish
 ```
 
 
@@ -128,15 +121,15 @@ develop branch.
 To start a new feature branch, run:
 
 ```bash
-./gitflow.py start -t feature -n "new-feature" -m "Starting new feature"
+./gitflow.py start -t feature new-feature
 ```
 
 ### Finish a Feature Branch
 
-To finish a feature branch, run:
+To finish a feature branch, make sure you are on the branch, then run:
 
 ```bash
-./gitflow.py finish -t feature -n "new-feature" -m "Finishing new feature"
+./gitflow.py finish
 ```
 
 
@@ -151,15 +144,15 @@ the main and develop branches.
 To start a new release branch, run:
 
 ```bash
-./gitflow.py start -t release -m "Starting release" -i "patch"
+./gitflow.py start -t release -i "patch"
 ```
 
 ### Finish a Release Branch
 
-To finish a release branch, run:
+To finish a release branch, make sure you are on the branch, then run:
 
 ```bash
-./gitflow.py finish -t release -n "v1.4.5" -m "Finishing release"
+./gitflow.py finish
 ```
 
 Should you have made last minute updates to the release branch, you can update the
@@ -1216,78 +1209,44 @@ def cds_update(
 #
 @app.command()
 def update(
-    name:    Optional[str] = typer.Option(None, "-n", "--name",    help="Specify the release name"),
     message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message"),
-    body:    Optional[str] = typer.Option(None, "-b", "--body",    help="Specify a commit message body")
+    body: Optional[str] = typer.Option(None, "-b", "--body", help="Specify a commit message body")
 ):
     """
-    Update a release branch and merge it back into the develop branch.
+    Update the current release branch and merge it back into the develop branch.
+    Must be run from the release branch that is being updated.
     """
-    branch_name = f"release/{name}"
+    try:
+        current_branch = repo.active_branch.name
 
-    offline = not check_network_connection()
-
-    if not offline:
-        console.print("[yellow]Warning: No network connection detected.[/yellow]")
-        offline = inquirer.confirm(message="Do you want to proceed in offline mode?", default=True).execute()
-        if not offline:
-            console.print("[red]Update operation aborted.[/red]")
+        if not current_branch.startswith('release/'):
+            console.print(f"[red]Error: Current branch '{current_branch}' is not a release branch[/red]")
             return
 
-    try:
-        original_branch = repo.active_branch.name
+        if not git_wrapper.handle_unstaged_changes('release'):
+            return
 
-        # Checkout the release branch
-        repo.git.checkout(branch_name)
-        console.print(f"[blue]Checked out {branch_name}[/blue]")
+        offline = not git_wrapper.check_network_connection()
 
-        # Check for unstaged changes
-        if repo.is_dirty(untracked_files=True):
-            console.print("[yellow]You have unstaged changes.[/yellow]")
-            action = inquirer.select(
-                message="How would you like to proceed?",
-                choices=[
-                    "Commit changes",
-                    "Stash changes",
-                    "Continue without committing",
-                    "Abort"
-                ]
-            ).execute()
+        if offline:
+            console.print("[yellow]Network is unavailable. Operating in offline mode.[/yellow]")
+        else:
+            fetch(remote="origin", branch=None, all_remotes=False, prune=False)
 
-            if action == "Commit changes":
-                full_commit_message = get_commit_message()
-                repo.git.add('.')
-                repo.git.commit('-m', full_commit_message)
-                console.print("[green]Changes committed.[/green]")
-            elif action == "Stash changes":
-                repo.git.stash('save', f"Stashed changes before updating {branch_name}")
-                console.print("[green]Changes stashed.[/green]")
-            elif action == "Abort":
-                console.print("[yellow]Update operation aborted.[/yellow]")
-                return
-        elif message:
-            if repo.index.diff("HEAD"):
-                commit_body = body or inquirer.text(message="Enter commit body (optional, press enter to skip):", default="").execute()
-                full_commit_message = message + "\n\n" + split_message_body(commit_body) if commit_body else message
-                repo.git.commit('-m', full_commit_message)
-                console.print(f"[green]Committed changes with message: {full_commit_message}[/green]")
-            else:
-                console.print("[yellow]No changes to commit.[/yellow]")
+        # Commit changes if a message is provided
+        if message:
+            full_commit_message = get_commit_message(message, body)
+            repo.git.add('.')
+            repo.git.commit('-m', full_commit_message)
+            console.print(f"[green]Committed changes with message: {full_commit_message}[/green]")
 
-        if not offline:
-            try:
-                # Use the fetch function we constructed earlier
-                fetch(remote="origin", branch=None, all_remotes=False, prune=False)
+        push_changes = git_wrapper.push_to_remote(current_branch)
 
-                # Push the release branch to remote
-                repo.git.push('origin', branch_name)
-                console.print(f"[green]Pushed changes to remote {branch_name}[/green]")
-            except GitCommandError as e:
-                console.print(f"[yellow]Warning: Unable to perform network operations. Error: {e}[/yellow]")
-                console.print("[yellow]Proceeding with local merge.[/yellow]")
+        if not push_changes:
+            console.print("[yellow]No changes to push. Continuing with merge.[/yellow]")
 
         # Check if there are differences between release and develop branches
-        changes_made = has_differences('develop', branch_name)
+        changes_made = has_differences('develop', current_branch)
         console.print(f"[blue]Differences detected: {changes_made}[/blue]")
 
         if not changes_made:
@@ -1295,54 +1254,27 @@ def update(
             return
 
         # Merge release branch into develop
-        console.print(f"[yellow]Merging {branch_name} into develop...[/yellow]")
-        repo.git.checkout('develop')
-        try:
-            repo.git.merge(branch_name, '--no-ff')
-            console.print(f"[green]Successfully merged {branch_name} into develop.[/green]")
-        except GitCommandError as e:
-            console.print(f"[red]Merge conflict occurred: {e}[/red]")
-            console.print("[yellow]Please resolve conflicts manually, then commit the changes.[/yellow]")
-            return
+        console.print(f"[yellow]Merging {current_branch} into develop...[/yellow]")
+        merge_successful = git_wrapper.merge_to_target(current_branch, 'develop')
 
-        if not offline:
-            try:
-                # Push develop branch to remote
-                repo.git.push('origin', 'develop')
-                console.print("[green]Pushed updated develop branch to remote.[/green]")
+        if merge_successful:
+            console.print(f"[green]Successfully merged {current_branch} into develop.[/green]")
 
-                # Create a pull request (if applicable)
+            if not offline:
+                # Create a pull request to merge develop into main
                 console.print(f"[yellow]Creating pull request to merge develop into main.[/yellow]")
-                prs_created = create_pull_request('main', 'develop', "update")
-                if prs_created:
+                pr_created = git_wrapper.create_pull_request('main', 'develop', "update")
+                if pr_created:
                     console.print(f"[green]Pull request created to merge develop into main.[/green]")
                 else:
-                    console.print(f"[red]Failed to create pull request. Please create it manually.[/red]")
-                    console.print(f"[yellow]You can use the GitHub web interface to create a pull request from develop to main.[/yellow]")
-            except GitCommandError as e:
-                console.print(f"[yellow]Warning: Unable to push or create pull request. Error: {e}[/yellow]")
-                console.print("[yellow]Local merge is complete. Please push changes and create pull request when online.[/yellow]")
+                    console.print(f"[yellow]No pull request created. Changes may have been pushed directly.[/yellow]")
+            else:
+                console.print("[yellow]Operating in offline mode. Please create a pull request when online.[/yellow]")
         else:
-            console.print("[yellow]Operating in offline mode. Local merge is complete.[/yellow]")
-            console.print("[yellow]Please push changes and create pull request when online.[/yellow]")
+            console.print(f"[yellow]Failed to merge {current_branch} into develop. Please resolve conflicts manually.[/yellow]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
-    finally:
-        # Return to the original branch
-        repo.git.checkout(original_branch)
-        console.print(f"[green]Returned to {original_branch}[/green]")
-
-        # If changes were stashed, ask if the user wants to pop them
-        if 'action' in locals() and action == "Stash changes":
-            pop_stash = inquirer.confirm(message="Do you want to pop the stashed changes?", default=True).execute()
-            if pop_stash:
-                try:
-                    repo.git.stash('pop')
-                    console.print("[green]Stashed changes reapplied.[/green]")
-                except GitCommandError as e:
-                    console.print(f"[red]Error reapplying stashed changes: {e}[/red]")
-                    console.print("[yellow]Your changes are still in the stash. You may need to manually resolve conflicts.[/yellow]")
 
 
 #
