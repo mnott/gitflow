@@ -360,8 +360,6 @@ import sys
 import os
 import shutil
 import glob
-import subprocess
-import shlex
 from datetime import datetime, timedelta
 from collections import defaultdict
 from pathlib import Path
@@ -373,174 +371,21 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import box
 import typer
-from git import Repo, GitCommandError
 from typing import Optional, List
 from InquirerPy import inquirer
+from git import Repo, GitCommandError
 
 import tempfile
 import requests
+import subprocess
 import os
+
+# Local imports
+from client import AIClient, GitConfig, DocGenerator, GitWrapper
 
 pretty.install()
 traceback.install()
 console = Console()
-
-
-class GitWrapper:
-    def __init__(self, repo):
-        self.repo = repo
-        self.temp_branches = []
-
-    def check_network_connection(self):
-        try:
-            self.repo.git.ls_remote('--exit-code', '--quiet', 'origin')
-            return True
-        except GitCommandError:
-            return False
-
-    def push(self, remote='origin', branch='develop', *args, **kwargs):
-        offline = not self.check_network_connection()
-        new_branch_name = None
-
-        try:
-            self.repo.git.push(remote, branch, *args, **kwargs)
-            return None  # No new branch created
-        except (GitCommandError, subprocess.CalledProcessError) as e:
-            if "protected branch" in str(e):
-                console.print(f"[yellow]Protected branch {branch} detected. Creating a new branch for pull request.[/yellow]")
-                new_branch_name = f"update-{branch}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                self.repo.git.checkout('-b', new_branch_name)
-                if not offline:
-                    self.repo.git.push('origin', new_branch_name)
-                    result = subprocess.run(
-                        ["gh", "pr", "create", "--base", branch, "--head", new_branch_name,
-                            "--title", f"Update {branch}", "--body", "Automated pull request from script"],
-                        capture_output=True, text=True
-                    )
-                    if result.returncode == 0:
-                        console.print(f"[green]Created pull request to merge changes from {new_branch_name} into {branch}[/green]")
-                        self.temp_branches.append(new_branch_name)
-                    else:
-                        console.print(f"[red]Error creating pull request: {result.stderr}[/red]")
-                else:
-                    console.print("[yellow]No network connection. New branch created locally. Push and create PR when online.[/yellow]")
-                    self.temp_branches.append(new_branch_name)
-
-                self.repo.git.checkout(branch)
-            else:
-                console.print(f"[red]Error: {e}[/red]")
-                raise e
-
-        return new_branch_name
-
-    def determine_branch_name(self, name, branch_type, week):
-        if name and branch_type != "release":
-            return f"{branch_type}/{name}" if branch_type != "local" else name
-        elif branch_type == "hotfix":
-            week_number = get_week_number(week)
-            return f"hotfix/week-{week_number}"
-        elif branch_type == "release" and name:
-            return f"release/{name}"
-        else:
-            console.print("[red]Error: Invalid branch configuration[/red]")
-            return None
-
-    def handle_unstaged_changes(self, branch_type):
-        if self.repo.is_dirty(untracked_files=True):
-            console.print("[yellow]You have unstaged changes.[/yellow]")
-            action = inquirer.select(
-                message="How would you like to proceed?",
-                choices=[
-                    "Commit changes",
-                    "Stash changes",
-                    "Continue without committing",
-                    "Abort"
-                ]
-            ).execute()
-
-            if action == "Commit changes":
-                full_commit_message = get_commit_message()
-                self.repo.git.add('.')
-                self.repo.git.commit('-m', full_commit_message)
-                console.print("[green]Changes committed.[/green]")
-            elif action == "Stash changes":
-                self.repo.git.stash('save', f"Stashed changes before finishing {branch_type}")
-                console.print("[green]Changes stashed.[/green]")
-            elif action == "Abort":
-                console.print("[yellow]Finish operation aborted.[/yellow]")
-                return False
-        return True
-
-    def push_to_remote(self, branch):
-        offline = not self.check_network_connection()
-        if offline:
-            console.print("[yellow]Offline mode. Changes will be pushed when online.[/yellow]")
-            return True
-
-        try:
-            self.push('origin', branch)
-            console.print(f"[green]Pushed changes to {branch}[/green]")
-            return True
-        except GitCommandError as e:
-            if "up-to-date" in str(e):
-                return False
-            console.print(f"[red]Error pushing to remote: {e}[/red]")
-            return False
-
-
-    def merge_to_target(self, source, target):
-        console.print(f"[blue]Merging {source} into {target}...[/blue]")
-        try:
-            self.repo.git.checkout(target)
-            self.repo.git.merge(source, '--no-ff')
-            new_branch = self.push('origin', target)
-            if new_branch:
-                console.print(f"[green]Pull request created to merge {source} into {target}[/green]")
-            else:
-                console.print(f"[green]Merged and pushed {source} into {target}[/green]")
-            return True
-        except GitCommandError as e:
-            console.print(f"[red]Unexpected error merging {source} into {target}: {e}[/red]")
-            return False
-
-    def delete_branch(self, branch, delete_remote=True):
-        try:
-            current_branch = self.repo.active_branch.name
-            if current_branch == branch:
-                self.repo.git.checkout('develop')
-
-            # Check if local branch exists before trying to delete it
-            if branch in [b.name for b in self.repo.branches]:
-                self.repo.git.branch('-D', branch)
-                console.print(f"[green]Deleted local branch {branch}[/green]")
-            else:
-                pass
-                # This error might just mean we've already deleted the branch
-                # e.g. when multi selecting branches to delete
-                # console.print(f"[yellow]Local branch {branch} not found. Skipping local deletion.[/yellow]")
-
-            if delete_remote and self.check_network_connection():
-                try:
-                    self.repo.git.push('origin', '--delete', branch)
-                    console.print(f"[green]Deleted remote branch {branch}[/green]")
-                except GitCommandError as e:
-                    if "remote ref does not exist" in str(e):
-                        pass
-                        # This error might just mean we've already deleted the branch
-                        # e.g. when multi selecting branches to delete
-                        # console.print(f"[yellow]Remote branch {branch} not found. Skipping remote deletion.[/yellow]")
-                    else:
-                        raise
-        except GitCommandError as e:
-            console.print(f"[yellow]Could not delete branch {branch}: {e}[/yellow]")
-
-    def cleanup_temp_branches(self):
-        for branch in self.temp_branches:
-            self.delete_branch(branch, delete_remote=False)
-        self.temp_branches = []
-
-
-
 
 
 app = typer.Typer(
@@ -551,36 +396,15 @@ app = typer.Typer(
     epilog="To get help about the script, call it with the --help option."
 )
 
-# Initialize the Git repository
-def find_git_repo(path):
-    try:
-        return Repo(path, search_parent_directories=True)
-    except GitCommandError:
-        return None
 
-# Try to find the Git repository
-current_path = Path.cwd()
-repo = find_git_repo(current_path)
-
-git_wrapper = GitWrapper(repo)
-
-if repo is None:
-    console.print("[red]Error: Not in a valid Git repository[/red]")
-    sys.exit(1)
+# Initialize the GitWrapper
+git_wrapper = GitWrapper()
 
 # Get the repository root directory
-repo_root = Path(repo.git.rev_parse("--show-toplevel"))
+repo_root = git_wrapper.get_repo_root()
 
 # Change the working directory to the repository root
 os.chdir(repo_root)
-
-
-# Get the current week number
-def get_week_number(week: Optional[int] = None) -> str:
-    """Get the current week number in the format YYYY-WW."""
-    if week is None:
-        week = datetime.now().isocalendar()[1]
-    return f"{datetime.now().year}-{week:02}"
 
 
 # Get the current week tag
@@ -618,24 +442,16 @@ def get_next_semver(increment: str, existing_tags: List[str]) -> str:
             return new_tag
 
 
-# Check whether we are online with the remote
-def check_network_connection():
-    try:
-        repo.git.ls_remote('--exit-code', '--quiet', 'origin')
-        return True
-    except GitCommandError:
-        return False
-
 
 # Check for Branch Differences
 def has_differences(base_branch: str, compare_branch: str):
-    if not check_network_connection():
+    if not git_wrapper.check_network_connection():
         console.print("[yellow]Warning: No network connection. Unable to fetch latest changes.[/yellow]")
         console.print("[yellow]Proceeding with local comparison.[/yellow]")
         try:
             # Use local refs for comparison
-            merge_base = repo.git.merge_base(base_branch, compare_branch)
-            diff = repo.git.diff(f'{merge_base}..{compare_branch}')
+            merge_base = git_wrapper.merge_base(base_branch, compare_branch)
+            diff = git_wrapper.get_diff(f'{merge_base}..{compare_branch}')
             return bool(diff.strip())
         except GitCommandError as e:
             console.print(f"[yellow]Warning: Error checking local differences: {e}[/yellow]")
@@ -646,8 +462,8 @@ def has_differences(base_branch: str, compare_branch: str):
         fetch(remote="origin", branch=base_branch, prune=False, all_remotes=False)
 
         # Now we can use the fetched remote branch
-        merge_base = repo.git.merge_base(f'origin/{base_branch}', compare_branch)
-        diff = repo.git.diff(f'{merge_base}..{compare_branch}')
+        merge_base = git_wrapper.merge_base(f'origin/{base_branch}', compare_branch)
+        diff = git_wrapper.get_diff(f'{merge_base}..{compare_branch}')
         return bool(diff.strip())
     except GitCommandError as e:
         console.print(f"[yellow]Warning: Error checking differences with {base_branch}: {e}[/yellow]")
@@ -711,57 +527,103 @@ def get_git_metadata(key: str) -> Optional[str]:
     except subprocess.CalledProcessError:
         return None
 
-
-#
-# Set some metadata in the .git/config file.
-#
-def set_git_metadata(key: str, value: str):
-    try:
-        subprocess.run(["git", "config", "--local", key, value], check=True)
-        console.print(f"[green]{key} saved successfully.[/green]")
-    except subprocess.CalledProcessError as e:
-        console.print(f"[red]Failed to save {key}: {e}[/red]")
-
-
 #
 # Configure the API Key and Model
 #
 @app.command()
 def config_ai(
-    api_key: Optional[str] = typer.Option(None, "--api-key", help="Your OpenAI API key"),
-    model  : Optional[str] = typer.Option(None, "--model",   help="Your OpenAI Model")
+    provider:     Optional[str] = typer.Argument(None,                          help="The AI provider to configure"),
+    set_default:           bool = typer.Option  (False,  "-d", "--set-default", help="Set the specified provider as default")
 ):
     """
-    Configure the OpenAI API key and model for the gitflow script.
+    Configure, update, create, delete, clone an AI provider interactively, or set the default provider.
 
-    Args:
-        api_key (str, optional): Your OpenAI API key. Defaults to None.
-        model   (str, optional): Your OpenAI Model. Defaults to None.
+    For reference, here is a typical configuration for GPT and Claude:
+
+    ```ini
+    [openai]
+    name = openai
+    aiprovider = true
+    apikey = sk-proj-...
+    model = gpt-4o
+    url = https://api.openai.com/v1/chat/completions
+    header = {Authorization: Bearer {api_key}}
+    response = response.json()['choices'][0]['message']['content']
+
+    [claude]
+    name = Claude
+    aiprovider = true
+    apikey = sk-ant-...
+    model = claude-3-5-sonnet-20240620
+    url = https://api.anthropic.com/v1/messages
+    header = {x-api-key: {api_key}, anthropic-version: 2023-06-01}
+    response = response.json()['content'][0]['text']
+    ```
+
     """
-    if api_key is None:
-        existing_api_key = get_git_metadata("openai.apikey")
+    git_config = GitConfig()
+    available_providers = git_config.get_available_providers()
 
-        if existing_api_key:
-            overwrite = inquirer.confirm(message="An API key already exists. Do you want to overwrite it?", default=False).execute()
-            if not overwrite:
-                console.print("[yellow]Keeping existing API key.[/yellow]")
+    if set_default:
+        if provider:
+            if provider in available_providers:
+                git_config.set_default_provider(provider)
+                console.print(f"[green]Set {provider} as the default AI provider.[/green]")
             else:
-                api_key = inquirer.secret(message="Enter your OpenAI API key:").execute()
+                console.print(f"[red]Provider '{provider}' not found. Cannot set as default.[/red]")
+        else:
+            if available_providers:
+                default_provider = inquirer.select(
+                    message="Select the default AI provider:",
+                    choices=available_providers
+                ).execute()
+                git_config.set_default_provider(default_provider)
+                console.print(f"[green]Set {default_provider} as the default AI provider.[/green]")
+            else:
+                console.print("[red]No AI providers found. Cannot set a default provider.[/red]")
+        return
 
-    if api_key is not None:
-        set_git_metadata("openai.apikey", api_key)
+    if not available_providers and provider is None:
+        console.print("[yellow]No AI providers found. Let's create one.[/yellow]")
+        provider = inquirer.text(message="Enter a name for the new provider:").execute()
 
-    if model is None:
-        existing_model = get_git_metadata("openai.model")
-        if existing_model:
-            overwrite = inquirer.confirm(message="An API model already exists. Do you want to overwrite it?", default=False).execute()
-            if not overwrite:
-                console.print("[yellow]Keeping existing API Model.[/yellow]")
+    if provider is None:
+        choices = available_providers + ["Create new provider", "Clone existing provider", "Set default provider"]
+
+        selected = inquirer.select(
+            message="Select an action:",
+            choices=choices
+        ).execute()
+
+        if selected == "Create new provider":
+            provider = inquirer.text(message="Enter the name for the new provider:").execute()
+        elif selected == "Clone existing provider":
+            source_provider = inquirer.select(
+                message="Select a provider to clone:",
+                choices=available_providers
+            ).execute()
+            target_provider = inquirer.text(message="Enter the name for the cloned provider:").execute()
+            if git_config.clone_provider(source_provider, target_provider):
+                provider = target_provider
+            else:
                 return
-        model = inquirer.text(message="Enter your OpenAI Model key:").execute()
+        elif selected == "Set default provider":
+            default_provider = inquirer.select(
+                message="Select the default AI provider:",
+                choices=available_providers
+            ).execute()
+            git_config.set_default_provider(default_provider)
+            console.print(f"[green]Set {default_provider} as the default AI provider.[/green]")
+            return
+        else:
+            provider = selected
 
-    if model is not None:
-        set_git_metadata("openai.model", model)
+    git_config.configure_provider(provider)
+
+    # Ask if the user wants to set this provider as default
+    if inquirer.confirm(message=f"Do you want to set {provider} as the default AI provider?", default=False).execute():
+        git_config.set_default_provider(provider)
+        console.print(f"[green]Set {provider} as the default AI provider.[/green]")
 
 
 #
@@ -847,15 +709,15 @@ def start(
     - message    : An optional commit message.
     - skip_switch: Whether to skip switching to the main or develop branch before creating the new branch. True is assumed for -t backup.
     """
-    offline = not check_network_connection()
+    offline = not git_wrapper.check_network_connection()
     if offline:
         console.print("[yellow]Network is unavailable. Operating in offline mode.[/yellow]")
 
     version_tag = None
-    existing_tags = [tag.name for tag in repo.tags]
+    existing_tags = git_wrapper.get_tags()
 
     if branch_type == "hotfix" and name is None:
-        week_number = get_week_number(week)
+        week_number = git_wrapper.get_week_number(week)
         name = f"week-{week_number}"
 
     if name:
@@ -879,34 +741,34 @@ def start(
     try:
         if not skip_switch:
             # Checkout base branch
-            repo.git.checkout(base_branch)
+            git_wrapper.checkout(base_branch)
             if not offline:
                 # Pull the latest changes if online
-                repo.git.pull('origin', base_branch)
+                git_wrapper.pull('origin', base_branch)
             else:
                 console.print(f"[yellow]Skipping pull from {base_branch} due to offline mode.[/yellow]")
 
         # Check if the branch already exists
-        if branch_name in repo.branches:
-            repo.git.checkout(branch_name)
+        if branch_name in git_wrapper.get_branches():
+            git_wrapper.checkout(branch_name)
             console.print(f"[yellow]Switched to existing branch {branch_name}[/yellow]")
         else:
             # Create and checkout the new branch
-            repo.git.checkout('-b', branch_name)
+            git_wrapper.checkout(branch_name, create=True)
             console.print(f"[green]Created and switched to branch {branch_name}[/green]")
 
         if message:
             # Commit the initial changes if a message is provided
-            repo.git.add('.')
-            if repo.index.diff("HEAD"):
-                repo.git.commit('-m', message)
+            git_wrapper.add('.')
+            if git_wrapper.get_index_diff("HEAD"):
+                git_wrapper.commit(message)
                 console.print(f"[green]Initial commit with message: {message}[/green]")
             else:
                 console.print(f"[yellow]No changes to commit.[/yellow]")
 
         if branch_type == "release" and version_tag:
             # Create the tag locally, but don't push it yet
-            repo.create_tag(version_tag, message=f"Release {version_tag}")
+            git_wrapper.create_tag(version_tag, message=f"Release {version_tag}")
             console.print(f"[green]Created local tag {version_tag}[/green]")
 
         if offline:
@@ -929,7 +791,7 @@ def finish(
     Must be run from the branch that is being finished.
     """
     try:
-        current_branch = repo.active_branch.name
+        current_branch = git_wrapper.get_current_branch()
 
         if current_branch in ['main', 'develop']:
             console.print("[red]Error: Cannot finish main or develop branches[/red]")
@@ -968,7 +830,7 @@ def finish(
         if branch_type == 'release' and not offline:
             tag_name = current_branch.split('/')[-1]
             try:
-                repo.git.push('origin', tag_name)
+                git_wrapper.push('origin', tag_name)
                 console.print(f"[green]Pushed tag {tag_name} to remote[/green]")
             except GitCommandError as e:
                 console.print(f"[yellow]Warning: Failed to push tag {tag_name}. Error: {e}[/yellow]")
@@ -1019,29 +881,29 @@ def weekly_update(
         main_branch = "main"
 
         # Store the current branch
-        original_branch = repo.active_branch.name
+        original_branch = git_wrapper.get_current_branch()
 
         # Ensure the weekly-updates branch is checked out, fetch it if necessary
-        if weekly_branch not in repo.branches:
-            repo.git.fetch('origin', weekly_branch)
-            repo.git.checkout('-b', weekly_branch, f'origin/{weekly_branch}')
+        if weekly_branch not in git_wrapper.get_branches():
+            git_wrapper.fetch('origin', weekly_branch)
+            git_wrapper.checkout(weekly_branch, start_point=f'origin/{weekly_branch}', create=True)
         else:
-            repo.git.checkout(weekly_branch)
-            repo.git.pull('origin', weekly_branch)
+            git_wrapper.checkout(weekly_branch)
+            git_wrapper.pull('origin', weekly_branch)
         console.print(f"[green]Pulled changes from {weekly_branch}[/green]")
 
         # Check for changes
-        if repo.is_dirty(untracked_files=True):
+        if git_wrapper.is_dirty():
             # Get the commit message
             full_commit_message = get_commit_message(message, body)
 
             # Commit changes
-            repo.git.add('.')
-            repo.git.commit('-m', full_commit_message)
+            git_wrapper.add('.')
+            git_wrapper.commit(full_commit_message)
             console.print("[green]Changes committed.[/green]")
 
             # Push changes
-            repo.git.push('origin', weekly_branch)
+            git_wrapper.push('origin', weekly_branch)
             console.print(f"[green]Pushed changes to {weekly_branch}[/green]")
         else:
             console.print("[yellow]No changes to commit.[/yellow]")
@@ -1077,7 +939,7 @@ def weekly_update(
             console.print(f"[yellow]No pull requests were created as there were no differences to merge.[/yellow]")
 
         # Return to the original branch
-        repo.git.checkout(original_branch)
+        git_wrapper.checkout(original_branch)
         console.print(f"[green]Returned to {original_branch}[/green]")
 
     except GitCommandError as e:
@@ -1118,13 +980,13 @@ def cds_update(
     """
     try:
         # Remember the current branch
-        original_branch = repo.active_branch.name
+        original_branch = git_wrapper.get_current_branch()
 
         # Determine the branch name from the local path
         branch_name = local.replace("/", "-")
 
         # Step 1: Clone or update remote tenantcleanup-cds repository
-        temp_repo_path = os.path.join(repo.working_tree_dir, "temp-tenantcleanup-cds")
+        temp_repo_path = os.path.join(git_wrapper.get_working_tree_dir(), "temp-tenantcleanup-cds")
         if os.path.exists(temp_repo_path):
             temp_repo = Repo(temp_repo_path)
             temp_repo.remotes.origin.pull()
@@ -1134,29 +996,29 @@ def cds_update(
             console.print("[green]Cloned remote tenantcleanup-cds repository[/green]")
 
         # Step 2: Switch to the specified branch
-        if branch_name in repo.branches:
-            repo.git.checkout(branch_name)
+        if branch_name in git_wrapper.get_branches():
+            git_wrapper.checkout(branch_name)
         else:
-            repo.git.checkout("-b", branch_name)
+            git_wrapper.checkout(branch_name, create=True)
         console.print(f"[green]Switched to {branch_name} branch[/green]")
 
         # Step 3: Copy contents
-        local_path = os.path.join(repo.working_tree_dir, local)
+        local_path = os.path.join(git_wrapper.get_working_tree_dir(), local)
         if os.path.exists(local_path):
             shutil.rmtree(local_path)
         shutil.copytree(temp_repo_path, local_path)
         console.print(f"[green]Copied contents from remote repository to /{local}[/green]")
 
         # Step 4: Commit and push changes
-        repo.git.add(local_path)
-        if repo.is_dirty():
+        git_wrapper.add(local_path)
+        if git_wrapper.is_dirty():
             # Get the commit message
             full_commit_message = get_commit_message(message or f"Sync changes from remote tenantcleanup-cds to {local}", body)
 
-            repo.git.commit('-m', full_commit_message)
+            git_wrapper.commit(full_commit_message)
             console.print("[green]Changes committed.[/green]")
 
-            repo.git.push("origin", branch_name)
+            git_wrapper.push("origin", branch_name)
             console.print(f"[green]Pushed changes to {branch_name} branch[/green]")
         else:
             console.print("[yellow]No changes to commit.[/yellow]")
@@ -1192,7 +1054,7 @@ def cds_update(
             console.print(f"[yellow]No pull requests were created as there were no differences to merge.[/yellow]")
 
         # Return to the original branch
-        repo.git.checkout(original_branch)
+        git_wrapper.checkout(original_branch)
         console.print(f"[green]Returned to branch {original_branch}[/green]")
 
     except GitCommandError as e:
@@ -1216,7 +1078,7 @@ def update(
     Must be run from the release branch that is being updated.
     """
     try:
-        current_branch = repo.active_branch.name
+        current_branch = git_wrapper.get_current_branch()
 
         if not current_branch.startswith('release/'):
             console.print(f"[red]Error: Current branch '{current_branch}' is not a release branch[/red]")
@@ -1235,8 +1097,8 @@ def update(
         # Commit changes if a message is provided
         if message:
             full_commit_message = get_commit_message(message, body)
-            repo.git.add('.')
-            repo.git.commit('-m', full_commit_message)
+            git_wrapper.add('.')
+            git_wrapper.commit(full_commit_message)
             console.print(f"[green]Committed changes with message: {full_commit_message}[/green]")
 
         push_changes = git_wrapper.push_to_remote(current_branch)
@@ -1288,9 +1150,9 @@ def ls():
     - List all branches:
         ./gitflow.py ls
     """
-    repo.git.fetch('--all', '--prune')
-    local_branches = [head.name for head in repo.heads]
-    remote_branches = [ref.name for ref in repo.remote().refs if ref.name != 'origin/HEAD']
+    git_wrapper.fetch('--all', '--prune')
+    local_branches  = git_wrapper.get_local_branches()
+    remote_branches = git_wrapper.get_remote_branches()
 
     console.print("[cyan]Local branches:[/cyan]")
     for branch in local_branches:
@@ -1324,14 +1186,14 @@ def checkout(
     - Force checkout to a branch, discarding local changes:
         ./gitflow.py checkout develop -f
     """
-    offline = not check_network_connection()
+    offline = not git_wrapper.check_network_connection()
 
     try:
         if target is None:
             # Interactive branch selection
-            local_branches = [f"Local : {head.name}" for head in repo.heads]
+            local_branches = [f"Local : {head.name}" for head in git_wrapper.get_heads()]
             if not offline:
-                remote_branches = [f"Remote: {ref.name.replace('origin/', '')}" for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
+                remote_branches = [f"Remote: {ref.name.replace('origin/', '')}" for ref in git_wrapper.get_origin_refs() if ref.name != 'origin/HEAD']
                 branches = local_branches + remote_branches
             else:
                 branches = local_branches
@@ -1346,9 +1208,9 @@ def checkout(
                 target = branch_name
 
         # Check if target is a branch
-        if target in repo.branches or (not offline and target.startswith("origin/")):
+        if target in git_wrapper.get_branches() or (not offline and target.startswith("origin/")):
             # Check if there are uncommitted changes
-            if repo.is_dirty(untracked_files=True) and not force:
+            if git_wrapper.is_dirty(untracked_files=True) and not force:
                 action = inquirer.select(
                     message="You have uncommitted changes. What would you like to do?",
                     choices=[
@@ -1359,7 +1221,7 @@ def checkout(
                 ).execute()
 
                 if action == "Stash changes":
-                    repo.git.stash('push')
+                    git_wrapper.stash('push')
                     console.print("[green]Changes stashed.[/green]")
                 elif action == "Abort":
                     console.print("[yellow]Operation aborted.[/yellow]")
@@ -1370,17 +1232,17 @@ def checkout(
                 if not offline and target.startswith("origin/"):
                     # For remote branches, create a new local branch
                     local_branch_name = target.split("/", 1)[1]
-                    if local_branch_name not in repo.branches:
-                        repo.git.checkout('-b', local_branch_name, target)
+                    if local_branch_name not in git_wrapper.get_branches():
+                        git_wrapper.checkout(local_branch_name, target, create=True)
                     else:
-                        repo.git.checkout(local_branch_name)
+                        git_wrapper.checkout(local_branch_name)
                         if not offline:
-                            repo.git.pull('origin', local_branch_name)
+                            git_wrapper.pull('origin', local_branch_name)
                 else:
                     if force:
-                        repo.git.checkout(target, force=True)
+                        git_wrapper.checkout(target, force=True)
                     else:
-                        repo.git.checkout(target)
+                        git_wrapper.checkout(target)
                 console.print(f"[green]Switched to branch {target.split('/')[-1]}[/green]")
             except GitCommandError as e:
                 console.print(f"[red]Error: {e}[/red]")
@@ -1388,10 +1250,10 @@ def checkout(
             # Revert changes in file or directory
             try:
                 if target == '.':
-                    repo.git.checkout('.')
+                    git_wrapper.checkout('.')
                     console.print(f"[green]Reverted all changes in the current directory[/green]")
                 else:
-                    repo.git.checkout('--', target)
+                    git_wrapper.checkout('--', target)
                     console.print(f"[green]Reverted changes in {target}[/green]")
             except GitCommandError as e:
                 console.print(f"[red]Error: {e}[/red]")
@@ -1404,7 +1266,7 @@ def checkout(
         pop_stash = inquirer.confirm(message="Do you want to pop the stashed changes?", default=True).execute()
         if pop_stash:
             try:
-                repo.git.stash('pop')
+                git_wrapper.stash('pop')
                 console.print("[green]Stashed changes reapplied.[/green]")
             except GitCommandError as e:
                 console.print(f"[red]Error reapplying stashed changes: {e}[/red]")
@@ -1429,13 +1291,13 @@ def rm(
 
     if git_wrapper.check_network_connection():
         # Update local and remote references
-        repo.git.fetch('--all')
-        repo.git.remote('prune', 'origin')
+        git_wrapper.fetch('--all')
+        git_wrapper.remote('prune', 'origin')
 
-    local_branches = [head.name for head in repo.heads if head.name not in ['develop', 'main']]
+    local_branches = [head.name for head in git_wrapper.get_repo_heads() if head.name not in ['develop', 'main']]
     remote_branches = []
     if git_wrapper.check_network_connection():
-        remote_branches = [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs
+        remote_branches = [ref.name.replace('origin/', '') for ref in git_wrapper.get_origin_refs()
                            if ref.name != 'origin/HEAD' and ref.name.replace('origin/', '') not in ['develop', 'main']]
 
     if not branch_names:
@@ -1479,8 +1341,8 @@ def rm(
         git_wrapper.delete_branch(branch_name, delete_remote=delete_remote)
 
     # Switch to develop branch if current branch was deleted
-    if repo.active_branch.name not in local_branches + ['develop', 'main']:
-        repo.git.checkout('develop')
+    if git_wrapper.get_current_branch() not in local_branches + ['develop', 'main']:
+        git_wrapper.checkout('develop')
         console.print("[green]Switched to 'develop' branch.[/green]")
 
 
@@ -1528,16 +1390,16 @@ def mv(
     - Rename both local and remote branches:
         ./gitflow.py mv old-feature-name new-feature-name -a
     """
-    offline = not check_network_connection()
+    offline = not git_wrapper.check_network_connection()
 
     if not offline:
-        repo.git.fetch('--all')
-        repo.git.remote('prune', 'origin')
+        git_wrapper.fetch('--all')
+        git_wrapper.remote('prune', 'origin')
 
-    local_branches = [head.name for head in repo.heads]
+    local_branches = [head.name for head in git_wrapper.get_repo_heads()]
     remote_branches = []
     if not offline:
-        remote_branches = [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
+        remote_branches = [ref.name.replace('origin/', '') for ref in git_wrapper.get_origin_refs() if ref.name != 'origin/HEAD']
 
     if not old_name:
         all_branches = [f"Local: {branch}" for branch in local_branches]
@@ -1569,7 +1431,7 @@ def mv(
 
     try:
         # Check for unstaged changes
-        if repo.is_dirty(untracked_files=True):
+        if git_wrapper.is_dirty(untracked_files=True):
             console.print("[yellow]You have unstaged changes.[/yellow]")
             action = inquirer.select(
                 message="How would you like to proceed?",
@@ -1582,8 +1444,8 @@ def mv(
 
             if action == "Commit changes":
                 full_commit_message = get_commit_message()
-                repo.git.add('.')
-                repo.git.commit('-m', full_commit_message)
+                git_wrapper.add('.')
+                git_wrapper.commit(full_commit_message)
                 console.print("[green]Changes committed.[/green]")
             elif action == "Abort":
                 console.print("[yellow]Rename operation aborted.[/yellow]")
@@ -1591,24 +1453,24 @@ def mv(
 
         # Rename local branch
         if rename_local and old_name in local_branches:
-            if old_name == repo.active_branch.name:
-                repo.git.branch('-m', new_name)
+            if old_name == git_wrapper.get_current_branch():
+                git_wrapper.branch('-m', new_name)
             else:
-                repo.git.branch('-m', old_name, new_name)
+                git_wrapper.branch('-m', old_name, new_name)
             console.print(f"[green]Renamed local branch from {old_name} to {new_name}[/green]")
 
         # Rename remote branch
         if rename_remote and old_name in remote_branches:
             try:
-                repo.git.push('origin', f'{new_name}')
-                repo.git.push('origin', f':{old_name}')
+                git_wrapper.push('origin', f'{new_name}')
+                git_wrapper.push('origin', f':{old_name}')
                 console.print(f"[green]Renamed remote branch from {old_name} to {new_name}[/green]")
             except GitCommandError as e:
                 if "protected branch" in str(e).lower():
                     console.print(f"[yellow]Protected branch {old_name} detected. Creating a new branch for pull request.[/yellow]")
                     pr_branch_name = f"rename-{old_name}-to-{new_name}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                    repo.git.checkout('-b', pr_branch_name)
-                    repo.git.push('origin', pr_branch_name)
+                    git_wrapper.checkout(pr_branch_name, create=True)
+                    git_wrapper.push('origin', pr_branch_name)
 
                     prs_created = create_pull_request(old_name, pr_branch_name, "rename")
                     if prs_created:
@@ -1617,13 +1479,13 @@ def mv(
                         console.print(f"[red]Failed to create pull request. Please create it manually.[/red]")
 
                     # Switch back to the original branch
-                    repo.git.checkout(old_name)
+                    git_wrapper.checkout(old_name)
                 else:
                     console.print(f"[red]Error renaming remote branch: {e}[/red]")
 
         # Update tracking for the local branch if both local and remote were renamed
         if rename_local and rename_remote:
-            repo.git.branch(f'--set-upstream-to=origin/{new_name}', new_name)
+            git_wrapper.branch(f'--set-upstream-to=origin/{new_name}', new_name)
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -1662,13 +1524,13 @@ def add(
     """
     try:
         if all:
-            repo.git.add('--all')
+            git_wrapper.add(all=True)
             console.print(f"[green]Added all changes to the staging area[/green]")
         else:
             if force:
-                repo.git.add(file_paths, force=True)
+                git_wrapper.add(file_paths, force=True)
             else:
-                repo.git.add(file_paths)
+                git_wrapper.add(file_paths)
             console.print(f"[green]Added {file_paths} to the staging area[/green]")
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -1690,11 +1552,11 @@ def stage(
     """
     try:
         if all:
-            repo.git.add('--all')
+            git_wrapper.add(all=True)
             console.print("[green]Staged all changes.[/green]")
         elif interactive:
             # Get only unstaged files
-            status = repo.git.status('--porcelain').splitlines()
+            status = git_wrapper.status('--porcelain').splitlines()
             unstaged = [s for s in status if s.startswith(' M') or s.startswith('??')]
 
             if not unstaged:
@@ -1710,16 +1572,16 @@ def stage(
             if selected:
                 for item in selected:
                     file = item[3:]  # Remove status indicators
-                    repo.git.add(file)
+                    git_wrapper.add(file)
                 console.print(f"[green]Staged selected files: {', '.join(file[3:] for file in selected)}[/green]")
             else:
                 console.print("[yellow]No files selected for staging.[/yellow]")
         elif files:
-            repo.git.add(files)
+            git_wrapper.add(files)
             console.print(f"[green]Staged specified files: {', '.join(files)}[/green]")
         else:
             # Get only unstaged files
-            status = repo.git.status('--porcelain').splitlines()
+            status = git_wrapper.status('--porcelain').splitlines()
             unstaged = [s for s in status if s.startswith(' M') or s.startswith('??')]
 
             if not unstaged:
@@ -1732,7 +1594,7 @@ def stage(
 
             stage_all = inquirer.confirm(message="Do you want to stage all unstaged changes?", default=False).execute()
             if stage_all:
-                repo.git.add('--all')
+                git_wrapper.add(all=True)
                 console.print("[green]Staged all unstaged changes.[/green]")
             else:
                 console.print("[yellow]No changes staged. Use --all or specify files to stage.[/yellow]")
@@ -1757,10 +1619,10 @@ def unstage(
     """
     try:
         if all:
-            repo.git.reset()
+            git_wrapper.reset()
             console.print("[green]Unstaged all changes.[/green]")
         elif interactive:
-            status = repo.git.diff('--name-status', '--cached').splitlines()
+            status = git_wrapper.get_diff('--name-status', '--cached').splitlines()
             if not status:
                 console.print("[yellow]No staged changes to unstage.[/yellow]")
                 return
@@ -1774,16 +1636,16 @@ def unstage(
             if selected:
                 for item in selected:
                     file = item.split()[1]  # Get filename
-                    repo.git.reset('HEAD', file)
+                    git_wrapper.reset('HEAD', file)
                 console.print(f"[green]Unstaged selected files: {', '.join(item.split()[1] for item in selected)}[/green]")
             else:
                 console.print("[yellow]No files selected for unstaging.[/yellow]")
         elif files:
             for file in files:
-                repo.git.reset('HEAD', file)
+                git_wrapper.reset('HEAD', file)
             console.print(f"[green]Unstaged specified files: {', '.join(files)}[/green]")
         else:
-            status = repo.git.diff('--name-status', '--cached').splitlines()
+            status = git_wrapper.get_diff('--name-status', '--cached').splitlines()
             if not status:
                 console.print("[yellow]No staged changes to unstage.[/yellow]")
                 return
@@ -1794,7 +1656,7 @@ def unstage(
 
             unstage_all = inquirer.confirm(message="Do you want to unstage all changes?", default=False).execute()
             if unstage_all:
-                repo.git.reset()
+                git_wrapper.reset()
                 console.print("[green]Unstaged all changes.[/green]")
             else:
                 console.print("[yellow]No changes unstaged. Use --all or specify files to unstage.[/yellow]")
@@ -1829,24 +1691,24 @@ def stash(
     """
     try:
         if list:
-            stash_list = repo.git.stash('list')
+            stash_list = git_wrapper.stash('list')
             if stash_list:
                 console.print("[blue]Stash list:[/blue]")
                 console.print(stash_list)
             else:
                 console.print("[yellow]No stashes found.[/yellow]")
         elif show:
-            stash_show = repo.git.stash('show', '-p', show)
+            stash_show = git_wrapper.stash('show', '-p', show)
             console.print(f"[blue]Changes in {show}:[/blue]")
             console.print(stash_show)
         elif drop:
-            stash_info = repo.git.stash('list', show).strip()
-            repo.git.stash('drop', drop)
+            stash_info = git_wrapper.stash('list', show).strip()
+            git_wrapper.stash('drop', drop)
             console.print(f"[green]Deleted stash: {stash_info}[/green]")
         elif clear:
             confirm = inquirer.confirm(message="Are you sure you want to clear all stashes?", default=False).execute()
             if confirm:
-                repo.git.stash('clear')
+                git_wrapper.stash('clear')
                 console.print("[green]Cleared all stashes.[/green]")
             else:
                 console.print("[yellow]Stash clear operation cancelled.[/yellow]")
@@ -1858,7 +1720,7 @@ def stash(
                 split_message = split_message_body(message)
                 stash_args.extend(['-m', split_message])
 
-            repo.git.stash(*stash_args)
+            git_wrapper.stash(*stash_args)
 
             if message:
                 console.print(f"[green]Stashed changes with message:[/green]\n{split_message}")
@@ -1894,7 +1756,7 @@ def unstash(
     """
     try:
         if interactive or not stash_id:
-            stash_list = repo.git.stash('list').splitlines()
+            stash_list = git_wrapper.stash('list').splitlines()
             if not stash_list:
                 console.print("[yellow]No stashes found.[/yellow]")
                 return
@@ -1906,10 +1768,10 @@ def unstash(
             stash_id = selected_stash.split(':')[0]
 
         if apply:
-            repo.git.stash('apply', stash_id)
+            git_wrapper.stash('apply', stash_id)
             console.print(f"[green]Applied stash {stash_id} without removing it.[/green]")
         else:
-            repo.git.stash('pop', stash_id)
+            git_wrapper.stash('pop', stash_id)
             console.print(f"[green]Popped stash {stash_id}.[/green]")
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -1952,22 +1814,22 @@ def commit(
     try:
         # Stage changes if files are specified
         if files:
-            repo.git.add(files)
+            git_wrapper.add(files)
             console.print(f"[green]Added specified files to the staging area: {', '.join(files)}[/green]")
         elif add_all:
-            repo.git.add('--all')
+            git_wrapper.add(all=True)
             console.print("[green]Added all changes to the staging area[/green]")
-        elif repo.is_dirty(untracked_files=True):
+        elif git_wrapper.is_dirty(untracked_files=True):
             console.print("[yellow]You have unstaged changes.[/yellow]")
             add_all = inquirer.confirm(message="Do you want to stage all changes?", default=True).execute()
             if add_all:
-                repo.git.add('--all')
+                git_wrapper.add(all=True)
                 console.print("[green]Added all changes to the staging area[/green]")
             else:
                 console.print("[yellow]Proceeding with only staged changes.[/yellow]")
 
         # Ensure there are changes to commit
-        if not repo.index.diff("HEAD") and not repo.untracked_files:
+        if not git_wrapper.get_index_diff("HEAD") and not git_wrapper.get_untracked_files():
             console.print("[yellow]No changes to commit.[/yellow]")
             return
 
@@ -1989,7 +1851,7 @@ def commit(
             return
 
         # Perform the commit
-        repo.git.commit('-m', full_commit_message)
+        git_wrapper.commit(full_commit_message)
         console.print(f"[green]Committed changes with message:[/green]\n{full_commit_message}")
 
     except GitCommandError as e:
@@ -2056,16 +1918,6 @@ def explain(
         ./gitflow.py explain path/to/file1.py --prompt "Focus on performance improvements"
     """
     try:
-        api_key = get_git_metadata("openai.apikey")
-        if not api_key:
-            console.print("[red]Failed to get OpenAI API key. Cannot generate explanation.[/red]")
-            return None
-
-        model = get_git_metadata("openai.model")
-        if not model:
-            console.print("[red]Failed to get OpenAI API model. Cannot generate explanation.[/red]")
-            return None
-
         if files:
             file_contents = {}
             file_histories = {}
@@ -2082,7 +1934,7 @@ def explain(
 
                 # Get the current content of the file from Git
                 try:
-                    current_content = repo.git.show(f'HEAD:{file}')
+                    current_content = git_wrapper.show(f'HEAD:{file}')
                 except GitCommandError:
                     console.print(f"[yellow]Warning: Couldn't retrieve current content of {file} from Git. Using local file.[/yellow]")
                     try:
@@ -2110,33 +1962,31 @@ def explain(
         else:
             # Determine the diff based on provided commits
             if commit:
-                diff = repo.git.show(f'{commit}^..{commit}')
+                diff = git_wrapper.show(f'{commit}^..{commit}')
             elif days is not None:
                 start = get_first_commit_last_n_days(days)
-                #diff = repo.git.diff(start)
                 command_parts = [
                     f"{start}..HEAD",
                     "--pretty=format:'%C(auto)%h %cd'",
                     "--date=short",
                     "-p"
                 ]
-                diff = repo.git.log(command_parts)
+                diff = git_wrapper.log(*command_parts)
             elif start and end:
-                diff = repo.git.diff(start, end)
+                diff = git_wrapper.get_diff(start, end)
             elif start:
-                #diff = repo.git.diff(start)
                 command_parts = [
                     f"{start}..HEAD",
                     "--pretty=format:'%C(auto)%h %cd'",
                     "--date=short",
                     "-p"
                 ]
-                diff = repo.git.log(command_parts)
+                diff = git_wrapper.log(*command_parts)
             else:
                 # Get diff of unstaged changes
-                unstaged_diff = repo.git.diff()
+                unstaged_diff = git_wrapper.get_diff()
                 # Get diff of staged changes
-                staged_diff = repo.git.diff('--cached')
+                staged_diff = git_wrapper.get_diff('--cached')
                 # Combine unstaged and staged diffs
                 diff = unstaged_diff + "\n" + staged_diff
 
@@ -2145,26 +1995,13 @@ def explain(
         if custom_prompt:
             prompt += f"\n\nAdditional instructions: \n{custom_prompt}"
 
-        # Prepare the API request
-        url = "https://api.openai.com/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "You are a helpful assistant that explains code changes and development history."},
-                {"role": "user", "content": prompt}
-            ]
-        }
+        # Use the AI client to generate the explanation
+        ai_client = AIClient(config_provider=GitConfig())
 
-        # Make the API request
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()
+        current_provider = ai_client.get_current_provider_name()
+        print(f"Generating a commit message using: {current_provider}")
 
-        # Extract the generated message
-        generated_message = response.json()['choices'][0]['message']['content']
+        generated_message = ai_client.prompt(prompt)
 
         if as_command:
             # Function was called as a command
@@ -2177,7 +2014,6 @@ def explain(
     except Exception as e:
         console.print(f"[red]Error generating explanation: {e}[/red]")
         return None
-
 
 def prompt_improve(file_contents, file_histories, examples):
     prompt = f"""
@@ -2412,7 +2248,7 @@ def get_file_history(filename, days=None, daily_summary=False):
             log_command = ['--since', since_date.strftime('%Y-%m-%d')] + log_command
 
         # Get the git log for the specific file
-        log_output = repo.git.log(*log_command)
+        log_output = git_wrapper.log(*log_command)
 
         # Process the log output
         if daily_summary:
@@ -2447,7 +2283,7 @@ def get_first_commit_last_n_days(n_days, hash_length=8):
     start_date = (datetime.now() - timedelta(days=n_days)).replace(hour=0, minute=0, second=0, microsecond=0)
     start_date_str = start_date.strftime('%Y-%m-%d')
 
-    commits = list(repo.iter_commits(since=start_date_str))
+    commits = git_wrapper.get_commits(since=start_date_str)
 
     first_commit_of_day = None
     last_commit_processed = None  # Variable to keep track of the last commit processed
@@ -2473,27 +2309,23 @@ def get_first_commit_last_n_days(n_days, hash_length=8):
 
 
 def get_commit_message(message=None, body=None):
-    api_key = get_git_metadata("openai.apikey")
-    if api_key:
-        use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
-        if use_ai:
-            generated_message = explain(files=None, commit=None, start=None, end=None, as_command=False, days=None, daily_summary=False, summary=False, improve=False, custom_prompt=None, examples=False)
-            if generated_message:
-                console.print("[green]AI-generated commit message:[/green]")
-                console.print(generated_message)
+    use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
+    if use_ai:
+        generated_message = explain(files=None, commit=None, start=None, end=None, as_command=False, days=None, daily_summary=False, summary=False, improve=False, custom_prompt=None, examples=False)
+        if generated_message:
+            console.print("[green]AI-generated commit message:[/green]")
+            console.print(generated_message)
 
-                edit_message = inquirer.confirm(message="Do you want to edit this message?", default=False).execute()
-                if edit_message:
-                    edited_message = edit_in_editor(generated_message)
-                    console.print("[green]Edited commit message:[/green]")
-                    console.print(edited_message)
-                    full_commit_message = edited_message
-                else:
-                    full_commit_message = generated_message
+            edit_message = inquirer.confirm(message="Do you want to edit this message?", default=False).execute()
+            if edit_message:
+                edited_message = edit_in_editor(generated_message)
+                console.print("[green]Edited commit message:[/green]")
+                console.print(edited_message)
+                full_commit_message = edited_message
             else:
-                console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
-                full_commit_message = get_manual_commit_message(message, body)
+                full_commit_message = generated_message
         else:
+            console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
             full_commit_message = get_manual_commit_message(message, body)
     else:
         full_commit_message = get_manual_commit_message(message, body)
@@ -2536,7 +2368,7 @@ def fetch(
     - Fetch changes from all remotes:
         ./gitflow.py fetch -a
     """
-    if not check_network_connection():
+    if not git_wrapper.check_network_connection():
         console.print("[red]Error: No network connection. Unable to fetch.[/red]")
         return
 
@@ -2544,22 +2376,22 @@ def fetch(
         if all_remotes:
             console.print("[blue]Fetching changes from all remotes...[/blue]")
             if prune:
-                repo.git.fetch('--all', '--prune')
+                git_wrapper.fetch('--all', '--prune')
             else:
-                repo.git.fetch('--all')
+                git_wrapper.fetch('--all')
             console.print("[green]Fetched changes from all remotes.[/green]")
         else:
             remote_name = remote or 'origin'
             if branch:
                 console.print(f"[blue]Fetching branch {branch} from remote {remote_name}...[/blue]")
-                repo.git.fetch(remote_name, branch)
+                git_wrapper.fetch(remote_name, branch)
                 console.print(f"[green]Fetched branch {branch} from remote {remote_name}.[/green]")
             else:
                 console.print(f"[blue]Fetching changes from remote {remote_name}...[/blue]")
                 if prune:
-                    repo.git.fetch('--prune', remote_name)
+                    git_wrapper.fetch('--prune', remote_name)
                 else:
-                    repo.git.fetch(remote_name)
+                    git_wrapper.fetch(remote_name)
                 console.print(f"[green]Fetched changes from remote {remote_name}.[/green]")
 
     except GitCommandError as e:
@@ -2593,23 +2425,23 @@ def merge(
     - Merge release branch into main with fast-forward:
         ./gitflow.py merge release/v1.0 main --no-ff=false
     """
-    original_branch = repo.active_branch.name
+    original_branch = git_wrapper.get_current_branch()
     try:
         # Check if we're in the middle of a merge
-        if repo.git.status('--porcelain', '--untracked-files=no') and os.path.exists(repo.git_dir + '/MERGE_HEAD'):
+        if git_wrapper.status('--porcelain', '--untracked-files=no') and os.path.exists(git_wrapper.get_git_dir() + '/MERGE_HEAD'):
             console.print("[yellow]Continuing previous merge...[/yellow]")
             return continue_merge()
 
         # Use the current branch if no source is provided
         if source is None:
-            source = repo.active_branch.name
+            source = git_wrapper.get_current_branch()
 
         # If no target is provided, use the current branch
         if target is None:
-            target = repo.active_branch.name
+            target = git_wrapper.get_current_branch()
 
         # Check for unstaged changes
-        if repo.is_dirty(untracked_files=True):
+        if git_wrapper.is_dirty(untracked_files=True):
             console.print("[yellow]You have unstaged changes.[/yellow]")
             action = inquirer.select(
                 message="How would you like to proceed?",
@@ -2644,30 +2476,30 @@ def merge(
                 else:
                     full_commit_message = get_manual_commit_message()
 
-                repo.git.add('.')
-                repo.git.commit('-m', full_commit_message)
+                git_wrapper.add('.')
+                git_wrapper.commit(full_commit_message)
                 console.print("[green]Changes committed.[/green]")
             elif action == "Stash changes":
-                repo.git.stash('save', f"Stashed changes before merging {source} into {target}")
+                git_wrapper.stash('save', f"Stashed changes before merging {source} into {target}")
                 console.print("[green]Changes stashed.[/green]")
             elif action == "Abort":
                 console.print("[yellow]Merge operation aborted.[/yellow]")
                 return
 
         # Check if the merge can be fast-forwarded
-        merge_base = repo.git.merge_base(target, source).strip()
-        target_head = repo.git.rev_parse(target).strip()
-        source_head = repo.git.rev_parse(source).strip()
+        merge_base = git_wrapper.merge_base(target, source).strip()
+        target_head = git_wrapper.rev_parse(target).strip()
+        source_head = git_wrapper.rev_parse(source).strip()
 
         if merge_base == target_head:
             console.print(f"[green]Fast-forwarding {target} to {source}[/green]")
-            repo.git.checkout(target)
-            repo.git.merge(source, '--ff-only')
+            git_wrapper.checkout(target)
+            git_wrapper.merge(source, ff_only=True)
             return
 
         # Check if there are differences between branches
         try:
-            rev_list = repo.git.rev_list('--left-right', '--count', f'{target}...{source}')
+            rev_list = git_wrapper.rev_list('--left-right', '--count', f'{target}...{source}')
             ahead, behind = map(int, rev_list.split())
             if ahead == 0 and behind == 0:
                 console.print(f"[yellow]No differences found between {source} and {target}. No merge needed.[/yellow]")
@@ -2678,28 +2510,28 @@ def merge(
             console.print(f"[yellow]Unable to determine differences between {source} and {target}. Proceeding with merge.[/yellow]")
 
         # Perform the merge
-        repo.git.checkout(target)
+        git_wrapper.checkout(target)
 
         try:
             # Force conflict detection by using --no-commit
             if squash:
-                repo.git.merge('--squash', '--no-commit', source)
+                git_wrapper.merge(source, squash=True, commit=False)
             else:
-                repo.git.merge('--no-commit', '--no-ff' if no_ff else None, source)
+                git_wrapper.merge(source, no_ff=no_ff, commit=False)
 
         except GitCommandError as e:
             console.print(f"[yellow]Merge conflicts detected. Please resolve the conflicts.[/yellow]")
             # Ensure the conflict markers are in place before proceeding
-            status = repo.git.status('--porcelain')
+            status = git_wrapper.status('--porcelain')
             if any(line.startswith('UU') for line in status.split('\n')):
                 return continue_merge()
             else:
                 console.print("[red]Error: Merge conflicts detected, but no conflict markers found. Aborting merge.[/red]")
-                repo.git.merge('--abort')
+                git_wrapper.merge(abort=True)
                 return
 
         # Check for conflicts
-        status = repo.git.status('--porcelain')
+        status = git_wrapper.status('--porcelain')
         if status:
             console.print(f"[yellow]Merge conflicts detected when merging {source} into {target}.[/yellow]")
             conflicting_files = [line.split()[1] for line in status.split('\n') if line.startswith('UU')]
@@ -2719,10 +2551,10 @@ def merge(
             if action == "Open git mergetool":
                 try:
                     subprocess.run(['git', 'mergetool'], check=True)
-                    status = repo.git.status('--porcelain')
+                    status = git_wrapper.status('--porcelain')
                     if not any(line.startswith('UU') for line in status.split('\n')):
                         console.print("[green]Conflicts resolved. Continuing merge...[/green]")
-                        repo.git.commit('-m', f"Merge branch '{source}' into {target}")
+                        git_wrapper.commit(f"Merge branch '{source}' into {target}")
                         # Cleanup .orig files
                         for file in glob.glob('*.orig'):
                             os.remove(file)
@@ -2732,15 +2564,15 @@ def merge(
                     console.print(f"[red]Error running git mergetool: {e}[/red]")
                 return
             elif action == "Abort merge":
-                repo.git.merge('--abort')
+                git_wrapper.merge(abort=True)
                 console.print("[yellow]Merge aborted.[/yellow]")
             else:
                 console.print("[yellow]Please resolve conflicts, stage the changes, and run the merge command again to continue.[/yellow]")
             return
         else:
             # No conflicts, complete the merge
-            if repo.is_dirty():  # Check if there are changes to commit
-                repo.git.commit('-m', f"Merge branch '{source}' into {target}")
+            if git_wrapper.is_dirty():  # Check if there are changes to commit
+                git_wrapper.commit(f"Merge branch '{source}' into {target}")
                 console.print(f"[green]Successfully merged {source} into {target}.[/green]")
             else:
                 console.print(f"[yellow]Merge completed but there were no changes to commit.[/yellow]")
@@ -2750,8 +2582,8 @@ def merge(
 
     finally:
         # Only checkout the original branch if there are no unresolved conflicts
-        if 'original_branch' in locals() and not any(line.startswith('UU') for line in repo.git.status('--porcelain').split('\n')):
-            repo.git.checkout(original_branch)
+        if 'original_branch' in locals() and not any(line.startswith('UU') for line in git_wrapper.status('--porcelain').split('\n')):
+            git_wrapper.checkout(original_branch)
             console.print(f"[green]Returned to {original_branch}[/green]")
 
             # If changes were stashed, ask if the user wants to pop them
@@ -2759,7 +2591,7 @@ def merge(
                 pop_stash = inquirer.confirm(message="Do you want to pop the stashed changes?", default=True).execute()
                 if pop_stash:
                     try:
-                        repo.git.stash('pop')
+                        git_wrapper.stash('pop')
                         console.print("[green]Stashed changes reapplied.[/green]")
                     except GitCommandError as e:
                         console.print(f"[red]Error reapplying stashed changes: {e}[/red]")
@@ -2769,7 +2601,7 @@ def merge(
 def continue_merge():
     try:
         # Check if there are still conflicts
-        status = repo.git.status('--porcelain')
+        status = git_wrapper.status('--porcelain')
         conflicting_files = [line.split()[1] for line in status.split('\n') if line.startswith('UU')]
 
         if conflicting_files:
@@ -2789,10 +2621,10 @@ def continue_merge():
             if action == "Open git mergetool":
                 try:
                     subprocess.run(['git', 'mergetool'], check=True)
-                    status = repo.git.status('--porcelain')
+                    status = git_wrapper.status('--porcelain')
                     if not any(line.startswith('UU') for line in status.split('\n')):
                         console.print("[green]Conflicts resolved. Continuing merge...[/green]")
-                        repo.git.commit('-m', "Merge conflicts resolved")
+                        git_wrapper.commit("Merge conflicts resolved")
                         # Cleanup .orig files
                         for file in glob.glob('*.orig'):
                             os.remove(file)
@@ -2802,13 +2634,13 @@ def continue_merge():
                     console.print(f"[red]Error running git mergetool: {e}[/red]")
                 return
             elif action == "Abort merge":
-                repo.git.merge('--abort')
+                git_wrapper.merge(abort=True)
                 console.print("[yellow]Merge aborted.[/yellow]")
             else:
                 console.print("[yellow]Please resolve conflicts, stage the changes, and run the merge command again to continue.[/yellow]")
         else:
             # Changes staged but not committed
-            repo.git.commit('--no-edit')
+            git_wrapper.commit('--no-edit')
             console.print(f"[green]Successfully completed the merge.[/green]")
 
     except GitCommandError as e:
@@ -2844,12 +2676,12 @@ def push(
     try:
         # Use the current branch if no branch is provided
         if branch is None:
-            branch = repo.active_branch.name
+            branch = git_wrapper.get_current_branch()
 
-        current_branch = repo.active_branch.name
+        current_branch = git_wrapper.get_current_branch()
 
         # Check for unstaged changes
-        if repo.is_dirty(untracked_files=True):
+        if git_wrapper.is_dirty(untracked_files=True):
             console.print("[yellow]You have unstaged changes.[/yellow]")
             action = inquirer.select(
                 message="How would you like to proceed?",
@@ -2863,17 +2695,17 @@ def push(
 
             if action == "Commit changes":
                 full_commit_message = get_commit_message()
-                repo.git.add('.')
-                repo.git.commit('-m', full_commit_message)
+                git_wrapper.add('.')
+                git_wrapper.commit(full_commit_message)
                 console.print("[green]Changes committed.[/green]")
             elif action == "Stash changes":
-                repo.git.stash('save', f"Stashed changes before finishing {branch}")
+                git_wrapper.stash('save', f"Stashed changes before finishing {branch}")
                 console.print("[green]Changes stashed.[/green]")
             elif action == "Abort":
                 console.print("[yellow]Push aborted.[/yellow]")
                 return
 
-        offline = not check_network_connection()
+        offline = not git_wrapper.check_network_connection()
 
         if not offline:
             # Use our custom fetch function
@@ -2883,7 +2715,7 @@ def push(
             changes_made = False
             try:
                 print(f"[blue]Checking differences between {branch} and origin/{branch}[/blue]")
-                ahead_behind = repo.git.rev_list('--left-right', '--count', f'origin/{branch}...HEAD').split()
+                ahead_behind = git_wrapper.rev_list('--left-right', '--count', f'origin/{branch}...HEAD').split()
                 behind = int(ahead_behind[0])
                 ahead = int(ahead_behind[1])
 
@@ -2903,7 +2735,7 @@ def push(
                             ]
                         ).execute()
                         if action == "Pull and rebase":
-                            repo.git.pull('--rebase', 'origin', branch)
+                            git_wrapper.pull('--rebase', 'origin', branch)
                         elif action == "Force push":
                             force = True
                         elif action == "Create pull request":
@@ -2979,26 +2811,26 @@ def pull(
     - Pull and prune:
         ./gitflow.py pull --prune
     """
-    if not check_network_connection():
+    if not git_wrapper.check_network_connection():
         console.print("[red]Error: No network connection. Unable to pull.[/red]")
         return
 
     try:
-        original_branch = repo.active_branch.name
+        original_branch = git_wrapper.get_current_branch()
         stashed_changes = False
 
         # Fetch changes first
         fetch_args = ['--all'] if all_branches else [remote]
         if prune:
             fetch_args.append('--prune')
-        repo.git.fetch(*fetch_args)
+        git_wrapper.fetch(*fetch_args)
         console.print("[green]Fetched changes from remote.[/green]")
 
         if all_branches:
             console.print("[blue]Pulling changes for all local branches...[/blue]")
 
             # Check for uncommitted changes before starting
-            if repo.is_dirty(untracked_files=True):
+            if git_wrapper.is_dirty(untracked_files=True):
                 action = inquirer.select(
                     message="You have uncommitted changes. What would you like to do?",
                     choices=[
@@ -3009,7 +2841,7 @@ def pull(
                 ).execute()
 
                 if action == "Stash changes":
-                    repo.git.stash('push')
+                    git_wrapper.stash('push')
                     console.print("[green]Changes stashed.[/green]")
                     stashed_changes = True
                 elif action == "Abort":
@@ -3017,12 +2849,12 @@ def pull(
                     return
 
             # Loop through each local branch and pull updates if there are changes
-            for branch in repo.branches:
-                local_commit = repo.git.rev_parse(branch.name)
-                remote_commit = repo.git.rev_parse(f'{remote}/{branch.name}')
+            for branch in git_wrapper.get_branches():
+                local_commit = git_wrapper.rev_parse(branch.name)
+                remote_commit = git_wrapper.rev_parse(f'{remote}/{branch.name}')
 
                 if local_commit != remote_commit:
-                    repo.git.checkout(branch.name)
+                    git_wrapper.checkout(branch.name)
                     console.print(f"[blue]Updating branch {branch.name}...[/blue]")
                     try:
                         if rebase:
@@ -3047,14 +2879,14 @@ def pull(
                     console.print(f"[yellow]Branch {branch.name} is up to date.[/yellow]")
 
             # Return to the original branch
-            repo.git.checkout(original_branch)
+            git_wrapper.checkout(original_branch)
             console.print(f"[green]Returned to branch {original_branch}[/green]")
         else:
             # Pull changes for the current branch
-            current_branch = branch or repo.active_branch.name
+            current_branch = branch or git_wrapper.get_current_branch()
             console.print(f"[blue]Pulling changes for branch {current_branch}...[/blue]")
 
-            if repo.is_dirty(untracked_files=True):
+            if git_wrapper.is_dirty(untracked_files=True):
                 action = inquirer.select(
                     message="You have uncommitted changes. What would you like to do?",
                     choices=[
@@ -3067,9 +2899,9 @@ def pull(
                 if action == "Stash changes":
                     stash_message = inquirer.text(message="Enter a stash message (optional):").execute()
                     if stash_message:
-                        repo.git.stash('push', '-m', stash_message)
+                        git_wrapper.stash('push', message=stash_message)
                     else:
-                        repo.git.stash('push')
+                        git_wrapper.stash('push')
                     console.print("[green]Changes stashed.[/green]")
                     stashed_changes = True
                 elif action == "Abort":
@@ -3101,7 +2933,7 @@ def pull(
             pop_stash = inquirer.confirm(message="Do you want to pop the stashed changes?", default=True).execute()
             if pop_stash:
                 try:
-                    repo.git.stash('pop')
+                    git_wrapper.stash('pop')
                     console.print("[green]Popped the stashed changes.[/green]")
                 except GitCommandError as e:
                     console.print(f"[red]Error popping stash: {e}[/red]")
@@ -3137,11 +2969,11 @@ def status():
         status_table.add_column("Details", style="green")
 
         # Get current branch
-        current_branch = repo.active_branch.name
+        current_branch = git_wrapper.get_current_branch()
         status_table.add_row("Current Branch", current_branch)
 
         # Get commit information
-        last_commit = repo.head.commit
+        last_commit = git_wrapper.get_last_commit()
         commit_message = last_commit.message.strip()
         commit_author = last_commit.author.name
         commit_date = last_commit.committed_datetime.strftime("%Y-%m-%d %H:%M:%S")
@@ -3151,7 +2983,7 @@ def status():
 
         # Get ahead/behind info
         try:
-            ahead_behind = repo.git.rev_list('--left-right', '--count', f'origin/{current_branch}...HEAD').split()
+            ahead_behind = git_wrapper.rev_list('--left-right', '--count', f'origin/{current_branch}...HEAD').split()
             behind = int(ahead_behind[0])
             ahead = int(ahead_behind[1])
             status_table.add_row("Commits Ahead/Behind", f"Ahead by {ahead}, Behind by {behind}")
@@ -3159,7 +2991,7 @@ def status():
             status_table.add_row("Commits Ahead/Behind", "Unable to determine")
 
         # Get status
-        status = repo.git.status(porcelain=True)
+        status = git_wrapper.status(porcelain=True)
         staged = [line for line in status.split('\n') if line.startswith(('A', 'M', 'R', 'D')) and len(line) > 1]
         unstaged = [line for line in status.split('\n') if line.startswith('??') or (line.startswith(' ') and len(line) > 1)]
 
@@ -3175,11 +3007,11 @@ def status():
             status_table.add_row("Changes", "Working tree clean")
 
         # Add remotes to table
-        remotes = repo.remotes
+        remotes = git_wrapper.get_remotes()
         if remotes:
             remote_info = []
-            for remote in remotes:
-                remote_info.append(f"{remote.name}: {remote.url}")
+            for remote_name, remote_url in remotes:
+                remote_info.append(f"{remote_name}: {remote_url}")
             status_table.add_row("Remotes", "\n".join(remote_info))
 
         # Display the table
@@ -3214,8 +3046,8 @@ def compare(
     """
     try:
         # List branches
-        local_branches = [head.name for head in repo.heads]
-        remote_branches = [ref.name.replace('origin/', '') for ref in repo.remotes.origin.refs if ref.name != 'origin/HEAD']
+        local_branches  = git_wrapper.get_local_branches()
+        remote_branches = [ref.name.replace('origin/', '') for ref in git_wrapper.get_origin_refs() if ref.name != 'origin/HEAD']
 
         if branch1 is None:
             branches = local_branches + remote_branches
@@ -3226,7 +3058,7 @@ def compare(
             branch2 = inquirer.select(message="Select the second branch:", choices=branches).execute()
 
         # Perform the diff
-        diff = repo.git.diff(f'{branch1}:{file_path}', f'{branch2}:{file_path}')
+        diff = git_wrapper.get_diff(f'{branch1}:{file_path}', f'{branch2}:{file_path}')
         console.print(diff if diff else "[green]No differences found.[/green]")
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -3260,10 +3092,10 @@ def cp(
         ./gitflow.py cp gitflow.py main develop --pr
     """
     try:
-        offline = not check_network_connection()
+        offline = not git_wrapper.check_network_connection()
 
         # Save the current branch
-        original_branch = repo.active_branch.name
+        original_branch = git_wrapper.get_current_branch()
 
         # Read the file content in the current branch
         try:
@@ -3275,7 +3107,7 @@ def cp(
 
         # If target_branches is not provided, show a list of branches to select from
         if not target_branches:
-            branches = [head.name for head in repo.heads if head.name != repo.active_branch.name]
+            branches = [head.name for head in git_wrapper.get_heads() if head.name != git_wrapper.get_current_branch()]
             target_branches = inquirer.checkbox(
                 message="Select branch(es) to copy into:",
                 choices=branches
@@ -3283,7 +3115,7 @@ def cp(
 
         for target_branch in target_branches:
             # Checkout the target branch
-            repo.git.checkout(target_branch)
+            git_wrapper.checkout(target_branch)
             console.print(f"[green]Switched to branch {target_branch}[/green]")
 
             # Read the file content in the target branch
@@ -3303,9 +3135,9 @@ def cp(
                     target_file.write(current_branch_file_content)
 
                 # Commit the change
-                repo.git.add(file_path)
+                git_wrapper.add(file_path)
                 commit_message = f"Copy latest changes for {file_path} from {original_branch} to {target_branch}"
-                repo.git.commit('-m', commit_message)
+                git_wrapper.commit(commit_message)
                 console.print(f"[green]Copied the latest changes for {file_path} into {target_branch}[/green]")
 
                 # Push changes or create a pull request
@@ -3315,8 +3147,8 @@ def cp(
                             if create_pr:
                                 # Create a new branch for the pull request
                                 pr_branch_name = f"cp-{file_path.replace('/', '-')}-{target_branch}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                                repo.git.checkout('-b', pr_branch_name)
-                                repo.git.push('origin', pr_branch_name)
+                                git_wrapper.checkout(pr_branch_name, create=True)
+                                git_wrapper.push('origin', pr_branch_name)
 
                                 # Create pull request
                                 result = subprocess.run(
@@ -3330,15 +3162,15 @@ def cp(
                                 else:
                                     console.print(f"[green]Created pull request to merge changes into {target_branch}[/green]")
                             else:
-                                repo.git.push('origin', target_branch)
+                                git_wrapper.push('origin', target_branch)
                                 console.print(f"[green]Pushed changes to {target_branch}[/green]")
                         except GitCommandError as e:
                             if "protected branch" in str(e):
                                 console.print(f"[yellow]Protected branch {target_branch} detected. Creating a pull request instead.[/yellow]")
                                 # Create a new branch for the pull request
                                 pr_branch_name = f"cp-{file_path.replace('/', '-')}-{target_branch}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                                repo.git.checkout('-b', pr_branch_name)
-                                repo.git.push('origin', pr_branch_name)
+                                git_wrapper.checkout(pr_branch_name, create=True)
+                                git_wrapper.push('origin', pr_branch_name)
 
                                 # Create pull request
                                 result = subprocess.run(
@@ -3357,7 +3189,7 @@ def cp(
                         console.print(f"[yellow]No network connection. Changes for {target_branch} will be pushed when online.[/yellow]")
 
         # Return to the original branch
-        repo.git.checkout(original_branch)
+        git_wrapper.checkout(original_branch)
         console.print(f"[green]Returned to branch {original_branch}[/green]")
 
     except GitCommandError as e:
@@ -3369,38 +3201,18 @@ def cp(
 # Command: Doc
 #
 @app.command()
-def doc (
-    ctx:        typer.Context,
-    title:      str  = typer.Option(None,   help="The title of the document"),
-    toc:        bool = typer.Option(False,  help="Whether to create a table of contents"),
+def doc(
+    ctx: typer.Context,
+    title: str = typer.Option(None,  help="The title of the document"),
+    toc:  bool = typer.Option(False, help="Whether to create a table of contents"),
 ) -> None:
     """
     Re-create the documentation and write it to the output file.
+
+    This command generates documentation for the script, including an optional
+    table of contents and custom title.
     """
-    import importlib
-    import importlib.util
-    import sys
-    import os
-    import doc2md
-
-    def import_path(path):
-        module_name = os.path.basename(path).replace("-", "_")
-        spec = importlib.util.spec_from_loader(
-            module_name,
-            importlib.machinery.SourceFileLoader(module_name, path),
-        )
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        sys.modules[module_name] = module
-        return module
-
-    mod_name = os.path.basename(__file__)
-    if mod_name.endswith(".py"):
-        mod_name = mod_name.rsplit(".py", 1)[0]
-    atitle = title or mod_name.replace("_", "-")
-    module = import_path(__file__)
-    docstr = module.__doc__
-    result = doc2md.doc2md(docstr, atitle, toc=toc, min_level=0)
+    result = DocGenerator.generate_doc(__file__, title, toc)
     print(result)
 
 
@@ -3408,15 +3220,11 @@ def doc (
 # Main function
 #
 if __name__ == "__main__":
-    if sys.gettrace() is not None:
-        # For debugging purposes
-        pass
-    else:
-        try:
-            app()
-        except SystemExit as e:
-            if e.code != 0:
-                raise
+    try:
+        app()
+    except SystemExit as e:
+        if e.code != 0:
+            raise
 
 
 
