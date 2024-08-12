@@ -866,7 +866,7 @@ def weekly_update(
         # Check for changes
         if git_wrapper.is_dirty():
             # Get the commit message
-            full_commit_message = git_wrapper.get_commit_message(message, body)
+            full_commit_message = get_commit_message(message, body)
 
             # Commit changes
             git_wrapper.add('.')
@@ -984,7 +984,7 @@ def cds_update(
         git_wrapper.add(local_path)
         if git_wrapper.is_dirty():
             # Get the commit message
-            full_commit_message = git_wrapper.get_commit_message(message or f"Sync changes from remote tenantcleanup-cds to {local}", body)
+            full_commit_message = get_commit_message(message or f"Sync changes from remote tenantcleanup-cds to {local}", body)
 
             git_wrapper.commit(full_commit_message)
             console.print("[green]Changes committed.[/green]")
@@ -1067,7 +1067,7 @@ def update(
 
         # Commit changes if a message is provided
         if message:
-            full_commit_message = git_wrapper.get_commit_message(message, body)
+            full_commit_message = get_commit_message(message, body)
             git_wrapper.add('.')
             git_wrapper.commit(full_commit_message)
             console.print(f"[green]Committed changes with message: {full_commit_message}[/green]")
@@ -1414,7 +1414,7 @@ def mv(
             ).execute()
 
             if action == "Commit changes":
-                full_commit_message = git_wrapper.get_commit_message()
+                full_commit_message = get_commit_message()
                 git_wrapper.add('.')
                 git_wrapper.commit(full_commit_message)
                 console.print("[green]Changes committed.[/green]")
@@ -1806,9 +1806,9 @@ def commit(
 
         api_key = git_wrapper.get_git_metadata("openai.apikey")
         if api_key and (interactive or not message):
-            full_commit_message = git_wrapper.get_commit_message(message, body)
+            full_commit_message = get_commit_message(message, body)
         else:
-            full_commit_message = git_wrapper.get_manual_commit_message(message, body)
+            full_commit_message = get_manual_commit_message(message, body)
 
         # Show the full commit message and ask for confirmation
         confirm = True
@@ -2710,7 +2710,7 @@ def push(
             ).execute()
 
             if action == "Commit changes":
-                full_commit_message = git_wrapper.get_commit_message()
+                full_commit_message = get_commit_message()
                 git_wrapper.add('.')
                 git_wrapper.commit(full_commit_message)
                 console.print("[green]Changes committed.[/green]")
