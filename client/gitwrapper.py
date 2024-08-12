@@ -29,7 +29,7 @@ class GitWrapper:
         return self.repo.working_tree_dir
 
     # Get the current week number
-    def get_week_number(week: Optional[int] = None) -> str:
+    def get_week_number(self, week: Optional[int] = None) -> str:
         """Get the current week number in the format YYYY-WW."""
         if week is None:
             week = datetime.now().isocalendar()[1]
@@ -92,31 +92,6 @@ class GitWrapper:
             self.console.print("[red]Error: Invalid branch configuration[/red]")
             return None
 
-    def handle_unstaged_changes(self, branch_type):
-        if self.repo.is_dirty(untracked_files=True):
-            self.console.print("[yellow]You have unstaged changes.[/yellow]")
-            action = inquirer.select(
-                message="How would you like to proceed?",
-                choices=[
-                    "Commit changes",
-                    "Stash changes",
-                    "Continue without committing",
-                    "Abort"
-                ]
-            ).execute()
-
-            if action == "Commit changes":
-                full_commit_message = self.get_commit_message()
-                self.repo.git.add('.')
-                self.repo.git.commit('-m', full_commit_message)
-                self.console.print("[green]Changes committed.[/green]")
-            elif action == "Stash changes":
-                self.repo.git.stash('save', f"Stashed changes before finishing {branch_type}")
-                self.console.print("[green]Changes stashed.[/green]")
-            elif action == "Abort":
-                self.console.print("[yellow]Finish operation aborted.[/yellow]")
-                return False
-        return True
 
     def push_to_remote(self, branch):
         offline = not self.check_network_connection()
@@ -253,6 +228,25 @@ class GitWrapper:
         else:
             self.repo.git.commit('-m', message)
 
+    def get_repo_heads(self):
+            """
+            Retrieves the list of all local branch heads.
+
+            :return: A list of branch head objects.
+            """
+            return self.repo.heads
+
+    def remote(self, command, *args):
+            """
+            Executes git remote commands.
+
+            :param command: The remote subcommand to execute (e.g., 'prune', 'add', 'remove').
+            :param args: Additional arguments for the subcommand.
+            :return: The output of the git remote command, if any.
+            """
+            cmd_args = [command] + list(args)
+            return self.repo.git.remote(*cmd_args)
+
     def stash(self, command='push', *args, message=None, include_untracked=False):
         cmd_args = [command]
 
@@ -383,8 +377,7 @@ class GitWrapper:
     def revert(self, commit):
         self.repo.git.revert(commit)
 
-    def get_commit_message(self, commit='HEAD'):
-        return self.repo.commit(commit).message
+
 
     def get_commit_author(self, commit='HEAD'):
         return self.repo.commit(commit).author.name

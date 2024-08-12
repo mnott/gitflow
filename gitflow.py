@@ -501,23 +501,6 @@ def create_pull_request(base_branch: str, branch_name: str, branch_type: str):
 
 
 #
-# Helper Function to split a commit message body at the 72nd character
-#
-def split_message_body(body: str) -> str:
-    """Splits the commit message body at the 72nd character, avoiding word splits."""
-    lines = []
-    for paragraph in body.split('\n'):
-        while len(paragraph) > 72:
-            split_pos = paragraph.rfind(' ', 0, 72)
-            if split_pos == -1:
-                split_pos = 72
-            lines.append(paragraph[:split_pos])
-            paragraph = paragraph[split_pos:].strip()
-        lines.append(paragraph)
-    return '\n'.join(lines)
-
-
-#
 # Get some metadata from the .git/config file.
 #
 def get_git_metadata(key: str) -> Optional[str]:
@@ -808,7 +791,7 @@ def finish(
             console.print(f"[red]Error: Current branch '{current_branch}' is not a feature, hotfix, or release branch[/red]")
             return
 
-        if not git_wrapper.handle_unstaged_changes(branch_type):
+        if not handle_unstaged_changes(branch_type):
             return
 
         offline = not git_wrapper.check_network_connection()
@@ -895,7 +878,7 @@ def weekly_update(
         # Check for changes
         if git_wrapper.is_dirty():
             # Get the commit message
-            full_commit_message = get_commit_message(message, body)
+            full_commit_message = git_wrapper.get_commit_message(message, body)
 
             # Commit changes
             git_wrapper.add('.')
@@ -1013,7 +996,7 @@ def cds_update(
         git_wrapper.add(local_path)
         if git_wrapper.is_dirty():
             # Get the commit message
-            full_commit_message = get_commit_message(message or f"Sync changes from remote tenantcleanup-cds to {local}", body)
+            full_commit_message = git_wrapper.get_commit_message(message or f"Sync changes from remote tenantcleanup-cds to {local}", body)
 
             git_wrapper.commit(full_commit_message)
             console.print("[green]Changes committed.[/green]")
@@ -1096,7 +1079,7 @@ def update(
 
         # Commit changes if a message is provided
         if message:
-            full_commit_message = get_commit_message(message, body)
+            full_commit_message = git_wrapper.get_commit_message(message, body)
             git_wrapper.add('.')
             git_wrapper.commit(full_commit_message)
             console.print(f"[green]Committed changes with message: {full_commit_message}[/green]")
@@ -1443,7 +1426,7 @@ def mv(
             ).execute()
 
             if action == "Commit changes":
-                full_commit_message = get_commit_message()
+                full_commit_message = git_wrapper.get_commit_message()
                 git_wrapper.add('.')
                 git_wrapper.commit(full_commit_message)
                 console.print("[green]Changes committed.[/green]")
@@ -1717,7 +1700,7 @@ def stash(
             if include_untracked:
                 stash_args.append('--include-untracked')
             if message:
-                split_message = split_message_body(message)
+                split_message = git_wrapper.split_message_body(message)
                 stash_args.extend(['-m', split_message])
 
             git_wrapper.stash(*stash_args)
@@ -1835,9 +1818,9 @@ def commit(
 
         api_key = get_git_metadata("openai.apikey")
         if api_key and (interactive or not message):
-            full_commit_message = get_commit_message(message, body)
+            full_commit_message = git_wrapper.get_commit_message(message, body)
         else:
-            full_commit_message = get_manual_commit_message(message, body)
+            full_commit_message = git_wrapper.get_manual_commit_message(message, body)
 
         # Show the full commit message and ask for confirmation
         confirm = True
@@ -1858,6 +1841,35 @@ def commit(
         console.print(f"[red]Error: {e}[/red]")
 
 
+
+def get_commit_message(message=None, body=None):
+    use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
+    if use_ai:
+        generated_message = explain(files=None, commit=None, start=None, end=None, as_command=False, days=None, daily_summary=False, summary=False, improve=False, custom_prompt=None, examples=False)
+        if generated_message:
+            console.print("[green]AI-generated commit message:[/green]")
+            console.print(generated_message)
+
+            edit_message = inquirer.confirm(message="Do you want to edit this message?", default=False).execute()
+            if edit_message:
+                edited_message = edit_in_editor(generated_message)
+                console.print("[green]Edited commit message:[/green]")
+                console.print(edited_message)
+                full_commit_message = edited_message
+            else:
+                full_commit_message = generated_message
+        else:
+            console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
+            full_commit_message = get_manual_commit_message(message, body)
+    else:
+        full_commit_message = get_manual_commit_message(message, body)
+
+    # Final confirmation
+    if not inquirer.confirm(message="Do you want to use this commit message?", default=True).execute():
+        return get_commit_message(message, body)  # Recursively call the function if the user doesn't confirm
+
+    return full_commit_message
+
 def get_manual_commit_message(message, body):
     if not message:
         message = inquirer.text(message="Enter commit message:").execute()
@@ -1869,6 +1881,51 @@ def get_manual_commit_message(message, body):
         full_commit_message += "\n\n" + split_message_body(body)
 
     return full_commit_message
+
+
+#
+# Helper Function to split a commit message body at the 72nd character
+#
+def split_message_body(body: str) -> str:
+    """Splits the commit message body at the 72nd character, avoiding word splits."""
+    lines = []
+    for paragraph in body.split('\n'):
+        while len(paragraph) > 72:
+            split_pos = paragraph.rfind(' ', 0, 72)
+            if split_pos == -1:
+                split_pos = 72
+            lines.append(paragraph[:split_pos])
+            paragraph = paragraph[split_pos:].strip()
+        lines.append(paragraph)
+    return '\n'.join(lines)
+
+
+def handle_unstaged_changes(branch_type):
+    if git_wrapper.is_dirty(untracked_files=True):
+        console.print("[yellow]You have unstaged changes.[/yellow]")
+        action = inquirer.select(
+            message="How would you like to proceed?",
+            choices=[
+                "Commit changes",
+                "Stash changes",
+                "Continue without committing",
+                "Abort"
+            ]
+        ).execute()
+
+        if action == "Commit changes":
+            full_commit_message = get_commit_message()
+            git_wrapper.add('.')
+            git_wrapper.commit(full_commit_message)
+            console.print("[green]Changes committed.[/green]")
+        elif action == "Stash changes":
+            git_wrapper.stash('save', f"Stashed changes before finishing {branch_type}")
+            console.print("[green]Changes stashed.[/green]")
+        elif action == "Abort":
+            console.print("[yellow]Finish operation aborted.[/yellow]")
+            return False
+    return True
+
 
 #
 # Explain Code Changes using AI
@@ -2308,35 +2365,6 @@ def get_first_commit_last_n_days(n_days, hash_length=8):
             return None
 
 
-def get_commit_message(message=None, body=None):
-    use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
-    if use_ai:
-        generated_message = explain(files=None, commit=None, start=None, end=None, as_command=False, days=None, daily_summary=False, summary=False, improve=False, custom_prompt=None, examples=False)
-        if generated_message:
-            console.print("[green]AI-generated commit message:[/green]")
-            console.print(generated_message)
-
-            edit_message = inquirer.confirm(message="Do you want to edit this message?", default=False).execute()
-            if edit_message:
-                edited_message = edit_in_editor(generated_message)
-                console.print("[green]Edited commit message:[/green]")
-                console.print(edited_message)
-                full_commit_message = edited_message
-            else:
-                full_commit_message = generated_message
-        else:
-            console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
-            full_commit_message = get_manual_commit_message(message, body)
-    else:
-        full_commit_message = get_manual_commit_message(message, body)
-
-    # Final confirmation
-    if not inquirer.confirm(message="Do you want to use this commit message?", default=True).execute():
-        return get_commit_message(message, body)  # Recursively call the function if the user doesn't confirm
-
-    return full_commit_message
-
-
 #
 # Fetch
 #
@@ -2470,11 +2498,11 @@ def merge(
                                 full_commit_message = generated_message
                         else:
                             console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
-                            full_commit_message = get_manual_commit_message()
+                            full_commit_message = git_wrapper.get_manual_commit_message()
                     else:
-                        full_commit_message = get_manual_commit_message()
+                        full_commit_message = git_wrapper.get_manual_commit_message()
                 else:
-                    full_commit_message = get_manual_commit_message()
+                    full_commit_message = git_wrapper.get_manual_commit_message()
 
                 git_wrapper.add('.')
                 git_wrapper.commit(full_commit_message)
@@ -2694,7 +2722,7 @@ def push(
             ).execute()
 
             if action == "Commit changes":
-                full_commit_message = get_commit_message()
+                full_commit_message = git_wrapper.get_commit_message()
                 git_wrapper.add('.')
                 git_wrapper.commit(full_commit_message)
                 console.print("[green]Changes committed.[/green]")
