@@ -28,6 +28,19 @@ class GitWrapper:
     def get_working_tree_dir(self):
         return self.repo.working_tree_dir
 
+    def rev_parse(self, rev):
+        """
+        Mimics the behavior of 'git rev-parse' to return the SHA-1 hash of the given revision.
+
+        :param rev: The revision to parse (e.g., a branch name, commit hash, etc.)
+        :return: The SHA-1 hash of the revision.
+        """
+        try:
+            return self.repo.git.rev_parse(rev).strip()
+        except GitCommandError as e:
+            self.console.print(f"[red]Error: {e}[/red]")
+            return None
+
     # Get the current week number
     def get_week_number(self, week: Optional[int] = None) -> str:
         """Get the current week number in the format YYYY-WW."""
