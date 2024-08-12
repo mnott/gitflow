@@ -356,19 +356,16 @@ To re-create the documentation and write it to the output file, run:
 This script is released under the [WTFPL License](https://en.wikipedia.org/wiki/WTFPL).
 """
 
-import sys
 import os
 import shutil
 import glob
 from datetime import datetime, timedelta
 from collections import defaultdict
-from pathlib import Path
 from rich import print
 from rich import traceback
 from rich import pretty
 from rich.console import Console
 from rich.table import Table
-from rich.panel import Panel
 from rich import box
 import typer
 from typing import Optional, List
@@ -376,7 +373,6 @@ from InquirerPy import inquirer
 from git import Repo, GitCommandError
 
 import tempfile
-import requests
 import subprocess
 import os
 
@@ -500,15 +496,7 @@ def create_pull_request(base_branch: str, branch_name: str, branch_type: str):
         return False
 
 
-#
-# Get some metadata from the .git/config file.
-#
-def get_git_metadata(key: str) -> Optional[str]:
-    try:
-        value = subprocess.check_output(["git", "config", "--get", key], universal_newlines=True).strip()
-        return value
-    except subprocess.CalledProcessError:
-        return None
+
 
 #
 # Configure the API Key and Model
@@ -1816,7 +1804,7 @@ def commit(
             console.print("[yellow]No changes to commit.[/yellow]")
             return
 
-        api_key = get_git_metadata("openai.apikey")
+        api_key = git_wrapper.get_git_metadata("openai.apikey")
         if api_key and (interactive or not message):
             full_commit_message = git_wrapper.get_commit_message(message, body)
         else:
@@ -2482,7 +2470,7 @@ def merge(
             ).execute()
 
             if action == "Commit changes":
-                api_key = get_git_metadata("openai.apikey")
+                api_key = git_wrapper.get_git_metadata("openai.apikey")
                 if api_key:
                     use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
                     if use_ai:
@@ -2885,23 +2873,10 @@ def pull(
                     git_wrapper.checkout(branch.name)
                     console.print(f"[blue]Updating branch {branch.name}...[/blue]")
                     try:
-                        if rebase:
-                            result = subprocess.run(
-                                ["git", "pull", "--rebase", remote, branch.name],
-                                capture_output=True,
-                                text=True
-                            )
-                        else:
-                            result = subprocess.run(
-                                ["git", "pull", remote, branch.name],
-                                capture_output=True,
-                                text=True
-                            )
+                        result = git_wrapper.pull(remote, branch.name, rebase=rebase)
                         console.print(f"[green]Pulled changes for branch {branch.name}[/green]")
-                        console.print(result.stdout)
-                        if result.stderr:
-                            console.print(result.stderr)
-                    except subprocess.CalledProcessError as e:
+                        console.print(result)
+                    except GitCommandError as e:
                         console.print(f"[red]Error pulling changes for branch {branch.name}: {e}[/red]")
                 else:
                     console.print(f"[yellow]Branch {branch.name} is up to date.[/yellow]")
@@ -2937,23 +2912,10 @@ def pull(
                     return
 
             try:
-                if rebase:
-                    result = subprocess.run(
-                        ["git", "pull", "--rebase", remote, current_branch],
-                        capture_output=True,
-                        text=True
-                    )
-                else:
-                    result = subprocess.run(
-                        ["git", "pull", remote, current_branch],
-                        capture_output=True,
-                        text=True
-                    )
+                result = git_wrapper.pull(remote, current_branch, rebase=rebase)
                 console.print(f"[green]Pulled changes for branch {current_branch}[/green]")
-                console.print(result.stdout)
-                if result.stderr:
-                    console.print(result.stderr)
-            except subprocess.CalledProcessError as e:
+                console.print(result)
+            except GitCommandError as e:
                 console.print(f"[red]Error pulling changes for branch {current_branch}: {e}[/red]")
 
         # After successful pull, ask if user wants to pop the stash
@@ -2978,6 +2940,7 @@ def pull(
         elif "Please commit your changes or stash them before you merge" in str(e):
             console.print("[yellow]You have uncommitted changes in your working directory.[/yellow]")
             console.print("[yellow]Please commit or stash your changes before pulling.[/yellow]")
+
 
 
 #
