@@ -75,8 +75,8 @@ The options are explained further below.
 
 Any branch type can be finished by
 
-a) Making sure you are on the branch you want to finish (use `checkout`)
-b) Running:
+- Making sure you are on the branch you want to finish (use `checkout`)
+- Running:
 
 ```bash
 ./gitflow.py finish
@@ -361,6 +361,7 @@ import os
 import shutil
 import glob
 import subprocess
+import shlex
 from datetime import datetime, timedelta
 from collections import defaultdict
 from pathlib import Path
