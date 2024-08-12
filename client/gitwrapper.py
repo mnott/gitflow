@@ -18,47 +18,202 @@ class GitWrapper:
             sys.exit(1)
         self.temp_branches = []
 
+    # -----------------------------------
+    # Repository Information and Metadata
+    # -----------------------------------
+
     def get_repo_root(self):
+        """Get the root directory of the current Git repository."""
         repo_root = Path(self.repo.git.rev_parse("--show-toplevel"))
         return repo_root
 
     def get_git_dir(self):
+        """Get the .git directory path."""
         return self.repo.git_dir
 
     def get_working_tree_dir(self):
+        """Get the working tree directory of the repository."""
         return self.repo.working_tree_dir
 
-    def rev_parse(self, rev):
-        """
-        Mimics the behavior of 'git rev-parse' to return the SHA-1 hash of the given revision.
+    def get_heads(self):
+        return self.repo.heads
 
-        :param rev: The revision to parse (e.g., a branch name, commit hash, etc.)
-        :return: The SHA-1 hash of the revision.
-        """
-        try:
-            return self.repo.git.rev_parse(rev).strip()
-        except GitCommandError as e:
-            self.console.print(f"[red]Error: {e}[/red]")
-            return None
+    def get_repo_heads(self):
+        """Retrieves the list of all local branch heads."""
+        return self.repo.heads
 
-    # Get the current week number
-    def get_week_number(self, week: Optional[int] = None) -> str:
-        """Get the current week number in the format YYYY-WW."""
-        if week is None:
-            week = datetime.now().isocalendar()[1]
-        return f"{datetime.now().year}-{week:02}"
+    def get_current_branch(self):
+        """Get the name of the currently active branch."""
+        return self.repo.active_branch.name
 
     def get_branches(self):
+        """Get a list of all branches in the repository."""
         return self.repo.branches
 
-    def check_network_connection(self):
+    def get_local_branches(self):
+        """Get a list of all local branches."""
+        return [head.name for head in self.repo.heads]
+
+    def get_remote_branches(self, remote='origin'):
+        """Get a list of all branches from the specified remote."""
+        return [ref.name for ref in self.repo.remote().refs if ref.name != 'origin/HEAD']
+
+    def get_remotes(self):
+        """Get a list of all remotes with their names and URLs."""
+        return [(remote.name, remote.url) for remote in self.repo.remotes]
+
+    def get_remote_url(self, remote='origin'):
+        """Get the URL of the specified remote."""
+        return self.repo.remotes[remote].url
+
+    # -----------------------------------
+    # Git Metadata Management
+    # -----------------------------------
+
+    def get_git_metadata(self, key: str) -> Optional[str]:
+        """Get a specific configuration value from the .git/config file."""
         try:
-            self.repo.git.ls_remote('--exit-code', '--quiet', 'origin')
-            return True
-        except GitCommandError:
-            return False
+            value = subprocess.check_output(["git", "config", "--get", key], universal_newlines=True).strip()
+            return value
+        except subprocess.CalledProcessError:
+            return None
+
+    def set_git_metadata(self, key: str, value: str):
+        """Set a specific configuration value in the .git/config file."""
+        try:
+            subprocess.run(["git", "config", "--local", key, value], check=True)
+            self.console.print(f"[green]{key} saved successfully.[/green]")
+        except subprocess.CalledProcessError as e:
+            self.console.print(f"[red]Failed to save {key}: {e}[/red]")
+
+    # -----------------------------------
+    # Commit and Tag Operations
+    # -----------------------------------
+
+    def get_last_commit(self):
+        """Get the last commit in the current branch."""
+        return self.repo.head.commit
+
+    def get_commit_author(self, commit='HEAD'):
+        """Get the author of a specific commit."""
+        return self.repo.commit(commit).author.name
+
+    def get_commit_date(self, commit='HEAD'):
+        """Get the date of a specific commit."""
+        return self.repo.commit(commit).committed_datetime
+
+    def commit(self, message):
+        """Commit changes with the specified message."""
+        if message == "--no-edit":
+            self.repo.git.commit('--no-edit')
+        else:
+            self.repo.git.commit('-m', message)
+
+    def create_tag(self, tag_name, message=None):
+        """Create a tag with an optional message."""
+        self.repo.create_tag(tag_name, message=message)
+
+    def get_tags(self):
+        """Get a list of all tags in the repository."""
+        return [tag.name for tag in self.repo.tags]
+
+    def push_tag(self, tag_name):
+        """Push a tag to the remote repository."""
+        self.repo.git.push('origin', tag_name)
+
+    # -----------------------------------
+    # Branch Operations
+    # -----------------------------------
+
+    def create_branch(self, branch_name):
+        """Create a new branch."""
+        self.repo.git.branch(branch_name)
+
+    def rename_branch(self, old_name, new_name):
+        """Rename an existing branch."""
+        self.repo.git.branch('-m', old_name, new_name)
+
+    def delete_branch(self, branch, delete_remote=True):
+        """Delete a branch locally and optionally on the remote."""
+        try:
+            current_branch = self.repo.active_branch.name
+            if current_branch == branch:
+                self.repo.git.checkout('develop')
+
+            # Check if local branch exists before trying to delete it
+            if branch in [b.name for b in self.repo.branches]:
+                self.repo.git.branch('-D', branch)
+                self.console.print(f"[green]Deleted local branch {branch}[/green]")
+
+            if delete_remote and self.check_network_connection():
+                try:
+                    self.repo.git.push('origin', '--delete', branch)
+                    self.console.print(f"[green]Deleted remote branch {branch}[/green]")
+                except GitCommandError as e:
+                    if "remote ref does not exist" in str(e):
+                        pass
+                    else:
+                        raise
+        except GitCommandError as e:
+            self.console.print(f"[yellow]Could not delete branch {branch}: {e}[/yellow]")
+
+    def checkout(self, branch, start_point=None, create=False, force=False):
+        """Checkout a branch, optionally creating it or forcing the operation."""
+        args = []
+
+        if branch == "--":
+            args.append('--')
+            args.append(start_point)
+        else:
+            if create:
+                args.extend(['-b', branch])
+            else:
+                args.append(branch)
+
+            if start_point:
+                args.append(start_point)
+
+        # Prepare keyword arguments
+        kwargs = {}
+
+        if force:
+            kwargs['force'] = True
+
+        # Execute the git checkout command
+        self.repo.git.checkout(*args, **kwargs)
+
+    def determine_branch_name(self, name, branch_type, week):
+        """Determine the full branch name based on the type and name."""
+        if name and branch_type != "release":
+            return f"{branch_type}/{name}" if branch_type != "local" else name
+        elif branch_type == "hotfix":
+            week_number = self.get_week_number(week)
+            return f"hotfix/week-{week_number}"
+        elif branch_type == "release" and name:
+            return f"release/{name}"
+        else:
+            self.console.print("[red]Error: Invalid branch configuration[/red]")
+            return None
+
+    # -----------------------------------
+    # Add, Pull, Push, Fetch, and Remote Operations
+    # -----------------------------------
+
+    def add(self, *file_paths, all=False, force=False):
+        args = []
+
+        if all:
+            args.append('--all')
+        else:
+            args.extend(file_paths)
+
+        if force:
+            args.append('--force')
+
+        self.repo.git.add(*args)
 
     def push(self, remote='origin', branch='develop', *args, **kwargs):
+        """Push changes to the specified remote and branch, with fallback for protected branches."""
         offline = not self.check_network_connection()
         new_branch_name = None
 
@@ -93,20 +248,8 @@ class GitWrapper:
 
         return new_branch_name
 
-    def determine_branch_name(self, name, branch_type, week):
-        if name and branch_type != "release":
-            return f"{branch_type}/{name}" if branch_type != "local" else name
-        elif branch_type == "hotfix":
-            week_number = self.get_week_number(week)
-            return f"hotfix/week-{week_number}"
-        elif branch_type == "release" and name:
-            return f"release/{name}"
-        else:
-            self.console.print("[red]Error: Invalid branch configuration[/red]")
-            return None
-
-
     def push_to_remote(self, branch):
+        """Push changes to the remote repository, with offline mode handling."""
         offline = not self.check_network_connection()
         if offline:
             self.console.print("[yellow]Offline mode. Changes will be pushed when online.[/yellow]")
@@ -122,96 +265,29 @@ class GitWrapper:
             self.console.print(f"[red]Error pushing to remote: {e}[/red]")
             return False
 
+    def pull(self, remote='origin', branch=None, rebase=False):
+        """
+        Pull changes from a remote repository.
 
-    def merge_base(self, base_branch, compare_branch):
-        return self.repo.git.merge_base(base_branch, compare_branch)
-
-    def merge_to_target(self, source, target):
-        self.console.print(f"[blue]Merging {source} into {target}...[/blue]")
-        try:
-            self.repo.git.checkout(target)
-            self.repo.git.merge(source, '--no-ff')
-            new_branch = self.push('origin', target)
-            if new_branch:
-                self.console.print(f"[green]Pull request created to merge {source} into {target}[/green]")
-            else:
-                self.console.print(f"[green]Merged and pushed {source} into {target}[/green]")
-            return True
-        except GitCommandError as e:
-            self.console.print(f"[red]Unexpected error merging {source} into {target}: {e}[/red]")
-            return False
-
-    def delete_branch(self, branch, delete_remote=True):
-        try:
-            current_branch = self.repo.active_branch.name
-            if current_branch == branch:
-                self.repo.git.checkout('develop')
-
-            # Check if local branch exists before trying to delete it
-            if branch in [b.name for b in self.repo.branches]:
-                self.repo.git.branch('-D', branch)
-                self.console.print(f"[green]Deleted local branch {branch}[/green]")
-            else:
-                pass
-                # This error might just mean we've already deleted the branch
-                # e.g. when multi selecting branches to delete
-                # console.print(f"[yellow]Local branch {branch} not found. Skipping local deletion.[/yellow]")
-
-            if delete_remote and self.check_network_connection():
-                try:
-                    self.repo.git.push('origin', '--delete', branch)
-                    self.console.print(f"[green]Deleted remote branch {branch}[/green]")
-                except GitCommandError as e:
-                    if "remote ref does not exist" in str(e):
-                        pass
-                        # This error might just mean we've already deleted the branch
-                        # e.g. when multi selecting branches to delete
-                        # console.print(f"[yellow]Remote branch {branch} not found. Skipping remote deletion.[/yellow]")
-                    else:
-                        raise
-        except GitCommandError as e:
-            self.console.print(f"[yellow]Could not delete branch {branch}: {e}[/yellow]")
-
-    def cleanup_temp_branches(self):
-        for branch in self.temp_branches:
-            self.delete_branch(branch, delete_remote=False)
-        self.temp_branches = []
-
-    def checkout(self, branch, start_point=None, create=False, force=False):
-        # Check if the branch is actually "--"
-        args = []
-
-        if branch == "--":
-            args.append('--')
-            args.append(start_point)
-        else:
-            if create:
-                args.extend(['-b', branch])
-            else:
-                args.append(branch)
-
-            if start_point:
-                args.append(start_point)
-
-        # Prepare keyword arguments
-        kwargs = {}
-
-        if force:
-            kwargs['force'] = True
-
-        # Execute the git checkout command
-        self.repo.git.checkout(*args, **kwargs)
-
-    def create_tag(self, tag_name, message=None):
-        self.repo.create_tag(tag_name, message=message)
-
-    def pull(self, remote='origin', branch=None):
+        :param remote: The remote to pull from (default: 'origin')
+        :param branch: The branch to pull (default: current branch)
+        :param rebase: Whether to rebase the current branch on top of the upstream branch after fetching
+        :return: The output of the pull command.
+        """
+        pull_args = ['git', 'pull', remote]
         if branch:
-            self.repo.git.pull(remote, branch)
-        else:
-            self.repo.git.pull()
+            pull_args.append(branch)
+        if rebase:
+            pull_args.insert(2, '--rebase')
+
+        try:
+            return self.repo.git.execute(pull_args)
+        except GitCommandError as e:
+            self.console.print(f"[red]Error: {e}[/red]")
+            raise e
 
     def fetch(self, remote='origin', branch=None, all_remotes=False, prune=False):
+        """Fetch updates from the remote repository."""
         args = []
         if all_remotes:
             args.append('--all')
@@ -222,64 +298,17 @@ class GitWrapper:
         else:
             self.repo.git.fetch(remote, *args)
 
-    def add(self, *file_paths, all=False, force=False):
-        args = []
-
-        if all:
-            args.append('--all')
-        else:
-            args.extend(file_paths)
-
-        if force:
-            args.append('--force')
-
-        self.repo.git.add(*args)
-
-    def commit(self, message):
-        if message == "--no-edit":
-            self.repo.git.commit('--no-edit')
-        else:
-            self.repo.git.commit('-m', message)
-
-    def get_repo_heads(self):
-            """
-            Retrieves the list of all local branch heads.
-
-            :return: A list of branch head objects.
-            """
-            return self.repo.heads
-
     def remote(self, command, *args):
-            """
-            Executes git remote commands.
+        """Execute git remote commands like 'prune', 'add', or 'remove'."""
+        cmd_args = [command] + list(args)
+        return self.repo.git.remote(*cmd_args)
 
-            :param command: The remote subcommand to execute (e.g., 'prune', 'add', 'remove').
-            :param args: Additional arguments for the subcommand.
-            :return: The output of the git remote command, if any.
-            """
-            cmd_args = [command] + list(args)
-            return self.repo.git.remote(*cmd_args)
-
-    def stash(self, command='push', *args, message=None, include_untracked=False):
-        cmd_args = [command]
-
-        if command in ['push', 'save']:
-            if include_untracked:
-                cmd_args.append('--include-untracked')
-            if message:
-                cmd_args.extend(['-m', message])
-
-        cmd_args.extend(args)  # Add any additional arguments
-
-        if command in ['list', 'show']:
-            return self.repo.git.stash(*cmd_args)
-        else:
-            self.repo.git.stash(*cmd_args)
-
-    def reset(self, mode='mixed', commit='HEAD'):
-        self.repo.git.reset(mode, commit)
+    # -----------------------------------
+    # Merge, Rebase, and Reset Operations
+    # -----------------------------------
 
     def merge(self, branch=None, squash=False, no_ff=True, commit=True, abort=False):
+        """Merge a branch into the current branch with various options."""
         args = []
 
         if abort:
@@ -296,42 +325,76 @@ class GitWrapper:
 
         self.repo.git.merge(*args)
 
+    def merge_base(self, base_branch, compare_branch):
+        """Find the common ancestor of two branches."""
+        return self.repo.git.merge_base(base_branch, compare_branch)
+
+    def merge_to_target(self, source, target):
+        """Merge the source branch into the target branch and push the changes."""
+        self.console.print(f"[blue]Merging {source} into {target}...[/blue]")
+        try:
+            self.repo.git.checkout(target)
+            self.repo.git.merge(source, '--no-ff')
+            new_branch = self.push('origin', target)
+            if new_branch:
+                self.console.print(f"[green]Pull request created to merge {source} into {target}[/green]")
+            else:
+                self.console.print(f"[green]Merged and pushed {source} into {target}[/green]")
+            return True
+        except GitCommandError as e:
+            self.console.print(f"[red]Unexpected error merging {source} into {target}: {e}[/red]")
+            return False
+
+    def reset(self, mode='mixed', commit='HEAD'):
+        """Reset the current HEAD to the specified state."""
+        self.repo.git.reset(mode, commit)
+
     def abort_merge(self):
+        """Abort the current merge process."""
         self.repo.git.merge('--abort')
 
-    def get_current_branch(self):
-        return self.repo.active_branch.name
+    def rebase(self, upstream, branch=None):
+        """Rebase the current branch onto the specified upstream branch."""
+        args = ['rebase', upstream]
+        if branch:
+            args.append(branch)
+        self.repo.git.execute(args)
 
-    def get_local_branches(self):
-        local_branches = [head.name for head in self.repo.heads]
-        return local_branches
+    # -----------------------------------
+    # Stashing Operations
+    # -----------------------------------
 
-    def get_remote_branches(self, remote='origin'):
-        remote_branches = [ref.name for ref in self.repo.remote().refs if ref.name != 'origin/HEAD']
-        return remote_branches
+    def stash(self, command='push', *args, message=None, include_untracked=False):
+        """Stash changes with options for message and including untracked files."""
+        cmd_args = [command]
 
-    def get_last_commit(self):
-        return self.repo.head.commit
+        if command in ['push', 'save']:
+            if include_untracked:
+                cmd_args.append('--include-untracked')
+            if message:
+                cmd_args.extend(['-m', message])
 
-    def get_heads(self):
-        return self.repo.heads
+        cmd_args.extend(args)  # Add any additional arguments
 
-    def get_origin_refs(self):
-        return self.repo.remotes.origin.refs
-
-    def get_commits(self, start=None, end='HEAD', max_count=None, since=None):
-        args = []
-        if max_count:
-            args.extend(['-n', str(max_count)])
-        if since:
-            args.extend(['--since', since])
-        if start:
-            args.append(f"{start}..{end}")
+        if command in ['list', 'show']:
+            return self.repo.git.stash(*cmd_args)
         else:
-            args.append(end)
-        return list(self.repo.iter_commits(*args))
+            self.repo.git.stash(*cmd_args)
+
+    def get_stashed_changes(self):
+        """Get a list of stashed changes."""
+        return self.repo.git.stash('list')
+
+    # -----------------------------------
+    # Status and Diff Operations
+    # -----------------------------------
+
+    def status(self, *args, **kwargs):
+        """Get the status of the working directory."""
+        return self.repo.git.status(*args, **kwargs)
 
     def get_diff(self, start=None, end=None):
+        """Get the diff between two commits or for the working directory."""
         if start is None:
             # Get diff of unstaged changes
             return self.repo.git.diff()
@@ -345,69 +408,99 @@ class GitWrapper:
         else:
             return self.repo.git.diff(start, end)
 
-    def get_index_diff(self, branch):
-        return self.repo.index.diff(branch)
-
-    def status(self, *args, **kwargs):
-        return self.repo.git.status(*args, **kwargs)
-
-    def get_remote_url(self, remote='origin'):
-        return self.repo.remotes[remote].url
-
-    def create_branch(self, branch_name):
-        self.repo.git.branch(branch_name)
-
-    def rename_branch(self, old_name, new_name):
-        self.repo.git.branch('-m', old_name, new_name)
-
-    def get_tags(self):
-        return [tag.name for tag in self.repo.tags]
-
-    def push_tag(self, tag_name):
-        self.repo.git.push('origin', tag_name)
-
-    def get_remotes(self):
-        return [(remote.name, remote.url) for remote in self.repo.remotes]
-
-    def get_remote_url(self, remote='origin'):
-        return self.repo.remotes[remote].url
-
     def is_dirty(self, untracked_files=True):
+        """Check if the working directory has uncommitted changes."""
         return self.repo.is_dirty(untracked_files=untracked_files)
 
     def get_untracked_files(self):
+        """Get a list of untracked files."""
         return self.repo.untracked_files
 
     def get_modified_files(self):
+        """Get a list of modified but unstaged files."""
         return [item.a_path for item in self.repo.index.diff(None)]
 
     def get_staged_files(self):
+        """Get a list of files that are staged for commit."""
         return [item.a_path for item in self.repo.index.diff('HEAD')]
 
+    def get_commits(self, start=None, end='HEAD', max_count=None, since=None):
+        """Get a list of commits in the specified range."""
+        args = []
+        if max_count:
+            args.extend(['-n', str(max_count)])
+        if since:
+            args.extend(['--since', since])
+        if start:
+            args.append(f"{start}..{end}")
+        else:
+            args.append(end)
+        return list(self.repo.iter_commits(*args))
+
+    def get_diff(self, start=None, end=None):
+        """Get the diff between two commits or the current working directory."""
+        if start is None:
+            return self.repo.git.diff()
+        elif end is None:
+            if '..' in start:
+                return self.repo.git.diff(start)
+            else:
+                return self.repo.git.diff(start)
+        else:
+            return self.repo.git.diff(start, end)
+
+    def get_index_diff(self, branch):
+        """Get the diff between the index and the specified branch."""
+        return self.repo.index.diff(branch)
+
+    def rev_parse(self, rev):
+        """Return the SHA-1 hash of the given revision."""
+        try:
+            return self.repo.git.rev_parse(rev).strip()
+        except GitCommandError as e:
+            self.console.print(f"[red]Error: {e}[/red]")
+            return None
+
+    def rev_list(self, *args):
+        """List commit objects in reverse chronological order."""
+        return self.repo.git.rev_list(*args)
+
+    # -----------------------------------
+    # Cleanup Operations
+    # -----------------------------------
+
+    def cleanup_temp_branches(self):
+        """Cleanup temporary branches created during operations."""
+        for branch in self.temp_branches:
+            self.delete_branch(branch, delete_remote=False)
+        self.temp_branches = []
+
+    # -----------------------------------
+    # Utility Methods
+    # -----------------------------------
+
+    def check_network_connection(self):
+        """Check if there is a network connection by trying to reach the remote."""
+        try:
+            self.repo.git.ls_remote('--exit-code', '--quiet', 'origin')
+            return True
+        except GitCommandError:
+            return False
+
+    def get_week_number(self, week: Optional[int] = None) -> str:
+        """Get the current week number in the format YYYY-WW."""
+        if week is None:
+            week = datetime.now().isocalendar()[1]
+        return f"{datetime.now().year}-{week:02}"
+
+    def get_origin_refs(self):
+        """Get references to all branches and tags from the origin remote."""
+        return self.repo.remotes.origin.refs
+
     def cherry_pick(self, commit):
+        """Cherry-pick a specific commit onto the current branch."""
         self.repo.git.cherry_pick(commit)
 
     def revert(self, commit):
+        """Revert a specific commit."""
         self.repo.git.revert(commit)
-
-
-
-    def get_commit_author(self, commit='HEAD'):
-        return self.repo.commit(commit).author.name
-
-    def get_commit_date(self, commit='HEAD'):
-        return self.repo.commit(commit).committed_datetime
-
-    def rev_list(self, *args):
-        return self.repo.git.rev_list(*args)
-
-
-    #
-    # Set some metadata in the .git/config file.
-    #
-    def set_git_metadata(self, key: str, value: str):
-        try:
-            subprocess.run(["git", "config", "--local", key, value], check=True)
-            self.console.print(f"[green]{key} saved successfully.[/green]")
-        except subprocess.CalledProcessError as e:
-            self.console.print(f"[red]Failed to save {key}: {e}[/red]")
