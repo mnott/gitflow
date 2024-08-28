@@ -372,6 +372,9 @@ from typing import Optional, List
 from InquirerPy import inquirer
 from git import Repo, GitCommandError
 
+import json
+import re
+
 import tempfile
 import subprocess
 import os
@@ -3186,6 +3189,114 @@ def cp(
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
 
+
+#
+# Clone an existing issue
+#
+@app.command()
+def clone_issue(
+    issue_number:       int = typer.Argument(..., help="The number of the issue to clone"),
+    empty_checkboxes: bool  = typer.Option  (True, "--empty-checkboxes/--keep-checkboxes", help="Empty checkboxes in the description"),
+    replace: Optional[str]  = typer.Option  (None, "--replace", help="String or regex pattern to replace in the title"),
+    with_str: Optional[str] = typer.Option  (None, "--with", help="String to replace with in the title"),
+    regex:             bool = typer.Option  (False, "--regex", help="Use regex for string replacement in title")
+):
+    """
+    Clone an existing issue, creating a new issue with the same metadata and comments.
+
+    Parameters:
+    - issue_number: The number of the issue to clone.
+    - empty_checkboxes: Whether to empty checkboxes in the description (default: True).
+    - replace: String or regex pattern to replace in the title.
+    - with_str: String to replace with in the title.
+    - regex: Use regex for string replacement in title.
+
+    Examples:
+    - Clone issue #245 and empty checkboxes:
+        ./gitflow.py clone_issue 245
+    - Clone issue #245, keep checkboxes, and replace 'CW35' with 'CW36' in the title:
+        ./gitflow.py clone_issue 245 --keep-checkboxes --replace "CW35" --with "CW36"
+    - Use regex to replace 'CW' followed by any digits with 'CW36' in the title:
+        ./gitflow.py clone_issue 245 --replace "CW[0-9]+" --with "CW36" --regex
+    """
+    try:
+        # Fetch the original issue details
+        result = subprocess.run(
+            ["gh", "issue", "view", str(issue_number), "--json", "title,body,labels,assignees"],
+            capture_output=True, text=True, check=True
+        )
+        issue_data = json.loads(result.stdout)
+
+        # Modify the body to empty checkboxes if requested
+        if empty_checkboxes:
+            issue_data['body'] = re.sub(r'\[x\]', '[ ]', issue_data['body'])
+
+        # Replace string in title if requested
+        if replace and with_str:
+            if regex:
+                try:
+                    issue_data['title'] = re.sub(replace, with_str, issue_data['title'])
+                except re.error as e:
+                    console.print(f"[red]Invalid regex pattern: {e}[/red]")
+                    return
+            else:
+                issue_data['title'] = issue_data['title'].replace(replace, with_str)
+
+        # Prepare the new issue creation command
+        create_cmd = [
+            "gh", "issue", "create",
+            "--title", issue_data['title'],
+            "--body", issue_data['body']
+        ]
+
+        # Add labels
+        for label in issue_data['labels']:
+            create_cmd.extend(["--label", label['name']])
+
+        # Add assignees
+        for assignee in issue_data['assignees']:
+            create_cmd.extend(["--assignee", assignee['login']])
+
+        # Create the new issue
+        result = subprocess.run(create_cmd, capture_output=True, text=True, check=True)
+        new_issue_url = result.stdout.strip()
+        new_issue_number = new_issue_url.split('/')[-1]
+
+        console.print(f"[green]Created new issue: {new_issue_url}[/green]")
+
+        # Fetch comments from the original issue
+        result = subprocess.run(
+            ["gh", "issue", "view", str(issue_number), "--comments"],
+            capture_output=True, text=True, check=True
+        )
+        comments = result.stdout.strip().split('\n\n')
+
+        # Add comments to the new issue
+        for comment in comments:
+            if comment.strip():  # Check if the comment is not empty
+                try:
+                    # Extract the comment body (everything after the first newline)
+                    comment_parts = comment.split('\n', 1)
+                    if len(comment_parts) > 1:
+                        comment_body = comment_parts[1].strip()
+                        comment_cmd = ["gh", "issue", "comment", new_issue_number, "--body", comment_body]
+                        subprocess.run(comment_cmd, check=True, capture_output=True, text=True)
+                    else:
+                        console.print(f"[yellow]Warning: Skipping comment due to unexpected format: {comment}[/yellow]")
+                except subprocess.CalledProcessError as e:
+                    console.print(f"[red]Error adding comment: {e.stderr}[/red]")
+                    console.print(f"[red]Command that failed: {' '.join(comment_cmd)}[/red]")
+
+        console.print(f"[green]Cloned issue #{issue_number} to #{new_issue_number} with all comments[/green]")
+
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Error: {e.stderr}[/red]")
+        console.print(f"[red]Command that failed: {' '.join(e.cmd)}[/red]")
+    except Exception as e:
+        console.print(f"[red]Error: {str(e)}[/red]")
+        console.print(f"[red]Error type: {type(e).__name__}[/red]")
+        import traceback
+        console.print(f"[red]Traceback: {traceback.format_exc()}[/red]")
 
 
 #
