@@ -3195,11 +3195,11 @@ def cp(
 #
 @app.command()
 def clone_issue(
-    issue_number:       int = typer.Argument(..., help="The number of the issue to clone"),
-    empty_checkboxes: bool  = typer.Option  (True, "--empty-checkboxes/--keep-checkboxes", help="Empty checkboxes in the description"),
-    replace: Optional[str]  = typer.Option  (None, "--replace", help="String or regex pattern to replace in the title"),
-    with_str: Optional[str] = typer.Option  (None, "--with", help="String to replace with in the title"),
-    regex:             bool = typer.Option  (False, "--regex", help="Use regex for string replacement in title")
+    issue_number:       int = typer.Argument(...,                                                          help="The number of the issue to clone"),
+    empty_checkboxes: bool  = typer.Option  (True,                 "--empty-checkboxes/--keep-checkboxes", help="Empty checkboxes in the description"),
+    replace: Optional[str]  = typer.Option  (None,                 "--replace",                            help="String or regex pattern to replace in the title"),
+    with_str: Optional[str] = typer.Option  (None,                 "--with",                               help="String to replace with in the title"),
+    regex:             bool = typer.Option  (True,                 "--regex",                              help="Use regex for string replacement in title")
 ):
     """
     Clone an existing issue, creating a new issue with the same metadata and comments.
