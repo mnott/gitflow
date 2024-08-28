@@ -3213,11 +3213,11 @@ def clone_issue(
 
     Examples:
     - Clone issue #245 and empty checkboxes:
-        ./gitflow.py clone_issue 245
+        ./gitflow.py clone-issue 245
     - Clone issue #245, keep checkboxes, and replace 'CW35' with 'CW36' in the title:
-        ./gitflow.py clone_issue 245 --keep-checkboxes --replace "CW35" --with "CW36"
+        ./gitflow.py clone-issue 245 --keep-checkboxes --replace "CW35" --with "CW36"
     - Use regex to replace 'CW' followed by any digits with 'CW36' in the title:
-        ./gitflow.py clone_issue 245 --replace "CW[0-9]+" --with "CW36" --regex
+        ./gitflow.py clone-issue 245 --replace "CW[0-9]+" --with "CW36" --regex
     """
     try:
         # Fetch the original issue details
