@@ -356,21 +356,25 @@ To re-create the documentation and write it to the output file, run:
 This script is released under the [WTFPL License](https://en.wikipedia.org/wiki/WTFPL).
 """
 
-import os
-import shutil
-import glob
-from datetime import datetime, timedelta
 from collections import defaultdict
-from rich import print
-from rich import traceback
-from rich import pretty
+from datetime import datetime, timedelta
+from git import Repo, GitCommandError
+from InquirerPy import inquirer
+from rich import box, pretty, print, traceback
 from rich.console import Console
 from rich.table import Table
-from rich import box
+from rich.text import Text
+from typing import List, Optional
+import glob
+import json
+import os
+import pytz
+import re
+import shutil
+import subprocess
 import typer
-from typing import Optional, List
-from InquirerPy import inquirer
-from git import Repo, GitCommandError
+import typer
+import urllib.parse
 
 import json
 import re
@@ -3190,36 +3194,331 @@ def cp(
         console.print(f"[red]Error: {e}[/red]")
 
 
+
+
+LABEL_COLORS = {
+    "bug":         "#CB233A",
+    "description": "#185ED2",
+    "duplicate":   "#C5C9CE",
+    "enhancement": "#94EBEA",
+    "help wanted": "#10745E",
+    "invalid":     "#DDE457",
+    "question":    "#CC59DD",
+    "wontfix":     "#FFFFFF",
+    "project":     "#5319E7"
+}
+
+def format_date(date_string):
+    if not date_string:
+        return ""
+    try:
+        date = datetime.fromisoformat(date_string.rstrip('Z'))
+        now = datetime.now(pytz.utc)
+        delta = now - date.replace(tzinfo=pytz.utc)
+
+        if delta.days == 0:
+            if delta.seconds < 3600:
+                return f"{delta.seconds // 60} minutes ago"
+            else:
+                return f"{delta.seconds // 3600} hours ago"
+        elif delta.days == 1:
+            return "yesterday"
+        elif delta.days < 7:
+            return f"{delta.days} days ago"
+        elif delta.days < 30:
+            return f"{delta.days // 7} weeks ago"
+        elif delta.days < 365:
+            return f"{delta.days // 30} months ago"
+        else:
+            return f"{delta.days // 365} years ago"
+    except AttributeError:
+        return "N/A"
+
+def format_author(author, use_login=False):
+    if not author:
+        return "N/A"
+    return author.get('login' if use_login else 'name', 'N/A')
+
+def format_assignees(assignees, use_login=False):
+    if not assignees:
+        return "N/A"
+    return ", ".join([a.get('login' if use_login else 'name', 'N/A') for a in assignees])
+
+import re
+from rich.console import Console
+
+def perform_search(search, issues, regex=False, search_in_body=False):
+    try:
+        # Determine if the search string is a regex or not
+        if regex:
+            search_regex = re.compile(search, re.IGNORECASE | re.DOTALL)
+        else:
+            # Treat search as a plain string and escape special characters
+            search_regex = re.compile(re.escape(search), re.IGNORECASE | re.DOTALL)
+
+        filtered_issues = []
+        for issue in issues:
+            title = issue.get('title', '')
+            body  = issue.get('body',  '')
+
+            # Check for negation search (if search string starts with '!')
+            if search.startswith('!'):
+                neg_search = search[1:].strip()  # Remove '!' and strip any extra whitespace
+                if regex:
+                    neg_search_regex = re.compile(neg_search, re.IGNORECASE | re.DOTALL)
+                else:
+                    neg_search_regex = re.compile(re.escape(neg_search), re.IGNORECASE | re.DOTALL)
+
+                # If title (and optionally body) do not contain the negation search, add to filtered issues
+                if search_in_body:
+                    if not neg_search_regex.search(title) and not neg_search_regex.search(body):
+                        filtered_issues.append(issue)
+                else:
+                    if not neg_search_regex.search(title):
+                        filtered_issues.append(issue)
+            else:
+                # Regular search: add to filtered issues if title or body matches the search
+                if search_in_body:
+                    if search_regex.search(title) or search_regex.search(body):
+                        filtered_issues.append(issue)
+                else:
+                    if search_regex.search(title):
+                        filtered_issues.append(issue)
+
+        issues = filtered_issues
+    except re.error as e:
+        console = Console()
+        console.print(f"[red]Invalid regex pattern: {e}[/red]")
+        return []
+    return issues
+
+
 #
-# Clone an existing issue
+# List GitHub issues
 #
 @app.command()
+def list_issues(
+    assignee:        Optional[str] = typer.Option(None,      "-a", "--assignee",  help="Filter by assignee"),
+    author:          Optional[str] = typer.Option(None,      "-A", "--author",    help="Filter by author"),
+    label:     Optional[List[str]] = typer.Option(None,      "-l", "--label",     help="Filter by label(s)"),
+    limit:                     int = typer.Option(100,       "-L", "--limit",     help="Maximum number of issues to fetch"),
+    mention:         Optional[str] = typer.Option(None,            "--mention",   help="Filter by mention"),
+    milestone:       Optional[str] = typer.Option(None,      "-m", "--milestone", help="Filter by milestone number or title"),
+    search:          Optional[str] = typer.Option(None,      "-s", "--search",    help="Search issues with query (supports regex)"),
+    search_in_body:           bool = typer.Option(False,     "-b", "--body",      help="Search in Body"),
+    regex:                    bool = typer.Option(False,     "-R", "--regex",     help="Use regex for searching"),
+    state:                     str = typer.Option("open",    "-S", "--state",     help="Filter by state: {open|closed|all}"),
+    web:                      bool = typer.Option(False,     "-w", "--web",       help="List issues in the web browser"),
+    sort_by:                   str = typer.Option("updated", "-o", "--order-by",  help="Sort issues by: created, updated"),
+    order:                     str = typer.Option("asc",     "-O", "--order",     help="Sort order: asc or desc"),
+    involved:                 bool = typer.Option(False,     "-i", "--involved",  help="Show only issues where you are involved"),
+    columns:   Optional[List[str]] = typer.Option(None,      "-c", "--column",    help="Specify columns to display"),
+    use_login:                bool = typer.Option(False,     "-L", "--use-login", help="Use login instead of name for author and assignees"),
+):
+    """
+    List GitHub issues with optional filtering, sorting, and configurable columns.
+
+    Available columns: number, title, state, labels, createdAt, updatedAt, author, assignees, comments, body, closed, closedAt, url
+
+    Default columns: number, state, labels, updatedAt, author, title, url
+
+    Examples:
+    - List issues with default columns:
+        gf list-issues
+    - List all issues with custom columns:
+        gf list-issues -c number -c title -c state -c labels -c author
+    - List all issues (open and closed) sorted by creation date:
+        gf list-issues --state all --order-by created
+    - Use login instead of name for author and assignees:
+        gf list-issues --use-login
+    - Search issues with a regex for not containing a colon:
+        gf list-issues --search '!:' -R
+    - List open issues related to "bug" with involved filter:
+        gf list-issues --search "bug" --involved --state open
+    - Search issues with plain text:
+        gf list-issues --search "Tenants with Issues"
+    """
+    # Define default columns
+    default_columns = ["number", "state", "labels", "updatedAt", "author", "title", "url"]
+
+    # Use default columns if no columns are specified
+    if columns is None:
+        columns = default_columns
+
+    if web:
+        # Get the current repository URL
+        try:
+            repo_url = subprocess.run(["gh", "repo", "view", "--json", "url"], capture_output=True, text=True, check=True)
+            repo_data = json.loads(repo_url.stdout)
+            base_url = f"{repo_data['url']}/issues"
+        except subprocess.CalledProcessError:
+            console = Console()
+            console.print("[red]Error: Unable to determine the current repository URL.[/red]")
+            return
+
+        # Construct the GitHub web URL with parameters
+        params = []
+        if assignee:
+            params.append(f"assignee={assignee}")
+        if author:
+            params.append(f"author={author}")
+        if label:
+            params.extend([f"label={l}" for l in label])
+        if mention:
+            params.append(f"mentions={mention}")
+        if milestone:
+            params.append(f"milestone={milestone}")
+        if search:
+            params.append(f"q={urllib.parse.quote(search)}")
+        if sort_by:
+            params.append(f"sort={sort_by}")
+        if order:
+            params.append(f"direction={order}")
+        params.append(f"state={state}")
+
+        url = f"{base_url}?{'&'.join(params)}"
+        typer.launch(url)
+        return
+
+    try:
+        # Construct the gh issue list command
+        cmd = ["gh", "issue", "list", "--json", "number,title,state,labels,createdAt,updatedAt,author,assignees,comments,body,closed,closedAt,url"]
+
+        if assignee:
+            cmd.extend(["--assignee", assignee])
+        if author:
+            cmd.extend(["--author", author])
+        if label:
+            for l in label:
+                cmd.extend(["--label", l])
+        if mention:
+            cmd.extend(["--mention", mention])
+        if milestone:
+            cmd.extend(["--milestone", milestone])
+        if involved:
+            cmd.extend(["--search", "involves:@me"])
+        cmd.extend(["--state", state])
+
+        # Execute the command
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        issues = json.loads(result.stdout)
+
+        # Client-side filtering based on search term (now supports regex)
+        if search:
+            issues =  perform_search(search, issues, regex, search_in_body)
+
+        # Sort issues
+        if sort_by:
+            sort_by = sort_by.lower()
+            if sort_by == "created":
+                issues.sort(key=lambda x: x.get('createdAt', ''), reverse=(order == "desc"))
+            elif sort_by == "updated":
+                issues.sort(key=lambda x: x.get('updatedAt', ''), reverse=(order == "desc"))
+            elif sort_by == "title":
+                issues.sort(key=lambda x: x.get('title', ''), reverse=(order == "desc"))
+            elif sort_by == "number" or sort_by == "id":
+                issues.sort(key=lambda x: x.get('ID', ''), reverse=(order == "desc"))
+
+
+        # Limit the number of issues
+        issues = issues[:limit]
+
+        # Create and populate the table
+        table = Table(title="GitHub Issues")
+        for column in columns:
+            if column in ['number', 'state']:
+                table.add_column(column.capitalize(), style="cyan", no_wrap=True, overflow='fold', min_width=6)
+            elif column == 'url':
+                table.add_column(column.capitalize(), style="cyan", no_wrap=True, overflow='fold', min_width=61)
+            elif column == 'title':
+                table.add_column(column.capitalize(), style="cyan", no_wrap=True, overflow='ellipsis', max_width=76)
+            elif column == 'lables':
+                table.add_column(column.capitalize(), style="cyan", no_wrap=False, overflow='ellipsis', max_width=10)
+            else:
+                table.add_column(column.capitalize(), style="cyan", no_wrap=True)
+
+        for issue in issues:
+            row = []
+            for column in columns:
+                if column == 'labels':
+                    labels_text = Text()
+                    for label in issue.get('labels', []):
+                        color = LABEL_COLORS.get(label['name'].lower(), "#FFFFFF")
+                        label_style = f"on {color}"
+                        if color == "#FFFFFF":
+                            label_style += " black"
+                        labels_text.append(f" {label['name']:^20} ", style=label_style)
+                    row.append(labels_text)
+                elif column in ['createdAt', 'updatedAt', 'closedAt']:
+                    row.append(format_date(issue.get(column)))
+                elif column == 'author':
+                    row.append(format_author(issue.get('author'), use_login))
+                elif column == 'assignees':
+                    row.append(format_assignees(issue.get('assignees'), use_login))
+                elif column == 'body':
+                    body = issue.get('body', '')
+                    row.append(body[:100] + '...' if len(body) > 100 else body)
+                else:
+                    row.append(str(issue.get(column, '')))
+            table.add_row(*row)
+
+        # Display the table
+        console = Console()
+        console.print(table)
+
+        # Print the total number of issues found
+        console.print(f"\nTotal issues found: {len(issues)}")
+
+    except subprocess.CalledProcessError as e:
+        console = Console()
+        console.print(f"[red]Error: {e.stderr}[/red]")
+    except Exception as e:
+        console = Console()
+        console.print(f"[red]Error: {str(e)}[/red]")
+        console.print(f"[red]Error type: {type(e).__name__}[/red]")
+
+
+@app.command()
 def clone_issue(
-    issue_number:       int = typer.Argument(...,                                                          help="The number of the issue to clone"),
-    empty_checkboxes: bool  = typer.Option  (True,                 "--empty-checkboxes/--keep-checkboxes", help="Empty checkboxes in the description"),
-    replace: Optional[str]  = typer.Option  (None,                 "--replace",                            help="String or regex pattern to replace in the title"),
-    with_str: Optional[str] = typer.Option  (None,                 "--with",                               help="String to replace with in the title"),
-    regex:             bool = typer.Option  (True,                 "--regex",                              help="Use regex for string replacement in title")
+    issue_number:              int = typer.Argument(..., help="The number of the issue to clone"),
+    empty_checkboxes:         bool = typer.Option  (True,  "--empty-checkboxes/--keep-checkboxes", help="Empty checkboxes in the description"),
+    replace:         Optional[str] = typer.Option  (None,  "-s", "--search",                       help="String or regex pattern to replace in the title"),
+    with_str:        Optional[str] = typer.Option  (None,  "-r", "--replace",                      help="String to replace with in the title"),
+    regex:                    bool = typer.Option  (True,  "-R", "--regex",                        help="Use regex for string replacement in title"),
+    new_title:       Optional[str] = typer.Option  (None,  "-t", "--title",                        help="Replace the entire title with a new one"),
+    keep_assignees:           bool = typer.Option  (True,  "-A", "--keep-assignees",               help="Keep the original assignees"),
+    assignees: Optional[List[str]] = typer.Option  (None,  "-a", "--assignee",                     help="List of assignees to add to the new issue")
 ):
     """
     Clone an existing issue, creating a new issue with the same metadata and comments.
 
     Parameters:
-    - issue_number: The number of the issue to clone.
+    - issue_number    : The number of the issue to clone.
     - empty_checkboxes: Whether to empty checkboxes in the description (default: True).
-    - replace: String or regex pattern to replace in the title.
-    - with_str: String to replace with in the title.
-    - regex: Use regex for string replacement in title.
+    - replace         : String or regex pattern to replace in the title.
+    - with_str        : String to replace with in the title.
+    - regex           : Use regex for string replacement in title.
+    - new_title       : Replace the entire title with a new one.
+    - keep_assignees  : Keep the original assignees (default: False).
+    - assignees       : List of assignees to add to the new issue.
 
     Examples:
     - Clone issue #245 and empty checkboxes:
         ./gitflow.py clone-issue 245
     - Clone issue #245, keep checkboxes, and replace 'CW35' with 'CW36' in the title:
-        ./gitflow.py clone-issue 245 --keep-checkboxes --replace "CW35" --with "CW36"
+        ./gitflow.py clone-issue 245 --keep-checkboxes --search "CW35" --replace "CW36"
     - Use regex to replace 'CW' followed by any digits with 'CW36' in the title:
-        ./gitflow.py clone-issue 245 --replace "CW[0-9]+" --with "CW36"
+        ./gitflow.py clone-issue 245 --search "CW[0-9]+" --replace "CW36"
+    - Clone issue #245 with a completely new title:
+        ./gitflow.py clone-issue 245 --title "New Issue Title"
+    - Clone issue #245 and remove the original assignees, assign to self, and give a new title:
+        ./gitflow.py clone-issue 245 -A -a @me --title "New Issue Title"
+        ./gitflow.py clone-issue 245 -A --title "New Issue Title"
+    - Clone issue #245 and assign it to specific users:
+        ./gitflow.py clone-issue 245 --assignee user1 --assignee user2
     """
     try:
+        console = Console()
         # Fetch the original issue details
         result = subprocess.run(
             ["gh", "issue", "view", str(issue_number), "--json", "title,body,labels,assignees"],
@@ -3231,8 +3530,10 @@ def clone_issue(
         if empty_checkboxes:
             issue_data['body'] = re.sub(r'\[x\]', '[ ]', issue_data['body'])
 
-        # Replace string in title if requested
-        if replace and with_str:
+        # Handle title replacement
+        if new_title:
+            issue_data['title'] = new_title
+        elif replace and with_str:
             if regex:
                 try:
                     issue_data['title'] = re.sub(replace, with_str, issue_data['title'])
@@ -3253,9 +3554,16 @@ def clone_issue(
         for label in issue_data['labels']:
             create_cmd.extend(["--label", label['name']])
 
-        # Add assignees
-        for assignee in issue_data['assignees']:
-            create_cmd.extend(["--assignee", assignee['login']])
+        # Handle assignees
+        if keep_assignees:
+            for assignee in issue_data['assignees']:
+                create_cmd.extend(["--assignee", assignee['login']])
+        elif assignees:
+            for assignee in assignees:
+                create_cmd.extend(["--assignee", assignee])
+        else:
+            # If no assignees specified and not keeping original, assign to current user
+            create_cmd.extend(["--assignee", "@me"])
 
         # Create the new issue
         result = subprocess.run(create_cmd, capture_output=True, text=True, check=True)
@@ -3290,9 +3598,11 @@ def clone_issue(
         console.print(f"[green]Cloned issue #{issue_number} to #{new_issue_number} with all comments[/green]")
 
     except subprocess.CalledProcessError as e:
+        console = Console()
         console.print(f"[red]Error: {e.stderr}[/red]")
         console.print(f"[red]Command that failed: {' '.join(e.cmd)}[/red]")
     except Exception as e:
+        console = Console()
         console.print(f"[red]Error: {str(e)}[/red]")
         console.print(f"[red]Error type: {type(e).__name__}[/red]")
         import traceback
