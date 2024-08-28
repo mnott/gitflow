@@ -303,11 +303,12 @@ class GitWrapper:
         cmd_args = [command] + list(args)
         return self.repo.git.remote(*cmd_args)
 
+
     # -----------------------------------
     # Merge, Rebase, and Reset Operations
     # -----------------------------------
 
-    def merge(self, branch=None, squash=False, no_ff=True, commit=True, abort=False):
+    def merge(self, branch=None, squash=False, no_ff=True, ff_only=False, commit=True, abort=False):
         """Merge a branch into the current branch with various options."""
         args = []
 
@@ -318,7 +319,9 @@ class GitWrapper:
                 args.append('--squash')
             if not commit:
                 args.append('--no-commit')
-            if no_ff:
+            if ff_only:
+                args.append('--ff-only')
+            elif no_ff:
                 args.append('--no-ff')
             if branch:
                 args.append(branch)
@@ -329,12 +332,15 @@ class GitWrapper:
         """Find the common ancestor of two branches."""
         return self.repo.git.merge_base(base_branch, compare_branch)
 
-    def merge_to_target(self, source, target):
+    def merge_to_target(self, source, target, no_ff=True):
         """Merge the source branch into the target branch and push the changes."""
         self.console.print(f"[blue]Merging {source} into {target}...[/blue]")
         try:
             self.repo.git.checkout(target)
-            self.repo.git.merge(source, '--no-ff')
+            merge_args = [source]
+            if no_ff:
+                merge_args.append('--no-ff')
+            self.repo.git.merge(*merge_args)
             new_branch = self.push('origin', target)
             if new_branch:
                 self.console.print(f"[green]Pull request created to merge {source} into {target}[/green]")
@@ -359,6 +365,7 @@ class GitWrapper:
         if branch:
             args.append(branch)
         self.repo.git.execute(args)
+
 
     # -----------------------------------
     # Stashing Operations
