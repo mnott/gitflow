@@ -351,6 +351,24 @@ To re-create the documentation and write it to the output file, run:
 ./gitflow.py doc
 ```
 
+## Issue Operations
+
+Github lacks the ability to clone issues. Hence here two commands that can come
+in handy:
+
+### Clone an Issue
+
+```bash
+./gitflow.py clone-issue 245 -A --title "New Issue Title"
+```
+
+
+### List Issues
+
+```bash
+./gitflow.py list-issues
+```
+
 # License
 
 This script is released under the [WTFPL License](https://en.wikipedia.org/wiki/WTFPL).
