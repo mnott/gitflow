@@ -3698,15 +3698,15 @@ def log(
                 # Parse commit info using regex for better accuracy
                 import re
 
-                # Pattern to match: hash, decorations (branches/tags), relative time, message, and author
-                pattern = r'([a-f0-9]+)(\s*(?:\(([^)]+)\))?)?\s+(\d+\s+\w+\s+ago)\s+(.+?)\s+\[([^\]]+)\]'
+                # Updated pattern to handle various time formats and better message separation
+                pattern = r'([a-f0-9]+)(\s*(?:\(([^)]+)\))?)?\s+((?:\d+\s+(?:year|month|week|day|hour|minute|second)s?,?\s*)+ago)\s+(.+?)\s+\[([^\]]+)\]'
                 match = re.match(pattern, commit)
 
                 if match:
                     hash_part = match.group(1)
-                    decorations = match.group(3) or ""  # Group 3 contains branch/tag info
-                    time_part = match.group(4).strip()  # This will be "X days/months/years ago"
-                    msg_part = match.group(5).strip()   # This will be the actual commit message
+                    decorations = match.group(3) or ""
+                    time_part = match.group(4).strip()
+                    msg_part = match.group(5).strip()
                     author_part = match.group(6)
 
                     # Create clickable hash
@@ -3721,8 +3721,15 @@ def log(
                         decorations
                     )
                 else:
-                    # Fallback for any commits that don't match the expected format
-                    table.add_row(commit, "", "", "", "")
+                    # Improved fallback for unmatched formats
+                    # Try to at least get the hash
+                    hash_match = re.match(r'([a-f0-9]+)', commit)
+                    if hash_match:
+                        hash_part = hash_match.group(1)
+                        hash_text = Text(hash_part, style="link " + f"{repo_url}/commit/{hash_part}")
+                        table.add_row(hash_text, "", commit, "", "")
+                    else:
+                        table.add_row("", "", commit, "", "")
 
             # Clear screen and show table
             console.clear()
