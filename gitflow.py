@@ -1914,6 +1914,7 @@ def split_message_body(body: str) -> str:
     return '\n'.join(lines)
 
 
+
 def handle_unstaged_changes(branch_type):
     if git_wrapper.is_dirty(untracked_files=True):
         console.print("[yellow]You have unstaged changes.[/yellow]")
@@ -3634,7 +3635,9 @@ def log(
     limit:     Optional[int] = typer.Option(None,  "-n", "--limit",     help="Limit the number of commits to show"),
     all:              bool   = typer.Option(False, "-a", "--all",       help="Show all branches"),
     no_merges:        bool   = typer.Option(True,  "-m", "--no-merges", help="Exclude merge commits"),
-    search:    Optional[str] = typer.Option(None,  "-s", "--search",    help="Search commits using regex pattern"),
+    search:    Optional[str] = typer.Option(None,  "-s", "--search",    help="Search pattern (in messages or code if -c is used)"),
+    code_search:      bool   = typer.Option(False, "-c", "--code-search", help="Search within code changes instead of commit messages"),
+    files:     Optional[str] = typer.Option(None,  "-f", "--files",     help="Restrict code search to files matching pattern (e.g. '*.py,*.sql')"),
     author:    Optional[str] = typer.Option(None,  "-u", "--author",    help="Filter by author"),
     branch:    Optional[str] = typer.Option(None,  "-b", "--branch",    help="Show commits from specific branch"),
     page_size:         int   = typer.Option(20,    "-p", "--page-size", help="Number of commits per page")
@@ -3659,19 +3662,32 @@ def log(
         if limit:
             cmd.extend(['-n', str(limit)])
         if search:
-            cmd.extend(['--grep', search, '--regexp-ignore-case', '--extended-regexp'])
+            if code_search:
+                # Search in code changes
+                cmd.extend(['-S', search, '--pickaxe-regex'])
+                if files:
+                    # Add file patterns to search
+                    for pattern in files.split(','):
+                        cmd.extend(['--', pattern.strip()])
+            else:
+                # Search in commit messages
+                cmd.extend(['--grep', search, '--regexp-ignore-case', '--extended-regexp'])
         if author:
             cmd.extend(['--author', author])
         if branch:
             cmd.append(branch)
 
-        # Get commit history
-        log_output = git_wrapper.execute_git_command(cmd)
-        commits = log_output.strip().split('\n')
+        # Show spinner while getting commits
+        with console.status("[bold green]Searching commits...") as status:
+            # Get commit history
+            log_output = git_wrapper.execute_git_command(cmd)
+            commits = log_output.strip().split('\n')
 
-        if not commits or commits[0] == '':
-            console.print("[yellow]No commits found.[/yellow]")
-            return
+            if not commits or commits[0] == '':
+                console.print("[yellow]No commits found.[/yellow]")
+                return
+
+            status.update("[bold green]Processing results...")
 
         # Calculate total pages
         total_commits = len(commits)
