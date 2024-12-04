@@ -511,3 +511,10 @@ class GitWrapper:
     def revert(self, commit):
         """Revert a specific commit."""
         self.repo.git.revert(commit)
+
+    def execute_git_command(self, cmd):
+        """Execute a git command and return its output."""
+        try:
+            return self.repo.git.execute(['git'] + cmd)
+        except GitCommandError as e:
+            raise GitCommandError(f"Git command failed: {e}")
