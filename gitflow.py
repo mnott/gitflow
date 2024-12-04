@@ -384,6 +384,7 @@ from rich.table import Table
 from rich.text import Text
 from typing import List, Optional
 import glob
+import math
 import json
 import os
 import pytz
@@ -1061,6 +1062,7 @@ def cds_update(
             shutil.rmtree(temp_repo_path)
 
 
+
 #
 # Update from a release branch merging it back into develop
 #
@@ -1295,7 +1297,6 @@ def rm(
     if git_wrapper.check_network_connection():
         remote_branches = [ref.name.replace('origin/', '') for ref in git_wrapper.get_origin_refs()
                            if ref.name != 'origin/HEAD' and ref.name.replace('origin/', '') not in ['develop', 'main']]
-
     if not branch_names:
         all_branches = [f"Local: {branch}" for branch in local_branches]
         if git_wrapper.check_network_connection():
@@ -3625,6 +3626,129 @@ def clone_issue(
         console.print(f"[red]Error type: {type(e).__name__}[/red]")
         import traceback
         console.print(f"[red]Traceback: {traceback.format_exc()}[/red]")
+
+
+
+@app.command()
+def log(
+    limit:     Optional[int] = typer.Option(None,  "-n", "--limit",     help="Limit the number of commits to show"),
+    all:              bool   = typer.Option(False, "-a", "--all",       help="Show all branches"),
+    no_merges:        bool   = typer.Option(True,  "-m", "--no-merges", help="Exclude merge commits"),
+    search:    Optional[str] = typer.Option(None,  "-s", "--search",    help="Search commits using regex pattern"),
+    author:    Optional[str] = typer.Option(None,  "-u", "--author",    help="Filter by author"),
+    branch:    Optional[str] = typer.Option(None,  "-b", "--branch",    help="Show commits from specific branch"),
+    page_size:         int   = typer.Option(20,    "-p", "--page-size", help="Number of commits per page")
+):
+    """
+    Show commit history in a paginated table with clickable links.
+    """
+    try:
+        # Get repository URL for clickable links
+        repo_url = git_wrapper.get_remote_url()
+        if repo_url.endswith('.git'):
+            repo_url = repo_url[:-4]
+
+        # Build git log command
+        log_format = '%C(yellow)%h%C(red)%d %cr %C(reset)%s%C(blue) [%cn]'
+        cmd = ['log', f'--pretty=format:{log_format}', '--decorate']
+
+        if no_merges:
+            cmd.append('--no-merges')
+        if all:
+            cmd.append('--all')
+        if limit:
+            cmd.extend(['-n', str(limit)])
+        if search:
+            cmd.extend(['--grep', search, '--regexp-ignore-case', '--extended-regexp'])
+        if author:
+            cmd.extend(['--author', author])
+        if branch:
+            cmd.append(branch)
+
+        # Get commit history
+        log_output = git_wrapper.execute_git_command(cmd)
+        commits = log_output.strip().split('\n')
+
+        if not commits or commits[0] == '':
+            console.print("[yellow]No commits found.[/yellow]")
+            return
+
+        # Calculate total pages
+        total_commits = len(commits)
+        total_pages = math.ceil(total_commits / page_size)
+        current_page = 1
+
+        while True:
+            # Create and populate the table
+            table = Table(
+                title=f"Git History (Page {current_page}/{total_pages})",
+                show_lines=True
+            )
+            table.add_column("Hash", style="yellow", no_wrap=True)
+            table.add_column("Time", style="green")
+            table.add_column("Message", style="white")  # Removed expand parameter
+            table.add_column("Author", style="blue")
+            table.add_column("Branches/Tags", style="red")
+
+            # Calculate slice for current page
+            start_idx = (current_page - 1) * page_size
+            end_idx = min(start_idx + page_size, total_commits)
+
+            for commit in commits[start_idx:end_idx]:
+                # Parse commit info using regex for better accuracy
+                import re
+
+                # Pattern to match: hash, decorations (branches/tags), relative time, message, and author
+                pattern = r'([a-f0-9]+)(\s*(?:\(([^)]+)\))?)?\s+(\d+\s+\w+\s+ago)\s+(.+?)\s+\[([^\]]+)\]'
+                match = re.match(pattern, commit)
+
+                if match:
+                    hash_part = match.group(1)
+                    decorations = match.group(3) or ""  # Group 3 contains branch/tag info
+                    time_part = match.group(4).strip()  # This will be "X days/months/years ago"
+                    msg_part = match.group(5).strip()   # This will be the actual commit message
+                    author_part = match.group(6)
+
+                    # Create clickable hash
+                    commit_url = f"{repo_url}/commit/{hash_part}"
+                    hash_text = Text(hash_part, style="link " + commit_url)
+
+                    table.add_row(
+                        hash_text,
+                        time_part,
+                        msg_part,
+                        author_part,
+                        decorations
+                    )
+                else:
+                    # Fallback for any commits that don't match the expected format
+                    table.add_row(commit, "", "", "", "")
+
+            # Clear screen and show table
+            console.clear()
+            console.print(table)
+
+            # Navigation options
+            if total_pages > 1:
+                console.print("\nNavigation: \\[n]ext page, \\[p]revious page, \\[q]uit, or click commit hash to view on GitHub")
+                key = inquirer.text(
+                    message="Enter option:",
+                    validate=lambda x: x.lower() in ['n', 'p', 'q', '']
+                ).execute()
+
+                if key.lower() == 'n' and current_page < total_pages:
+                    current_page += 1
+                elif key.lower() == 'p' and current_page > 1:
+                    current_page -= 1
+                elif key.lower() in ['q', '']:  # Added empty string to handle Enter key
+                    break
+            else:
+                console.print("\nPress Enter to exit, or click commit hash to view on GitHub")
+                inquirer.text(message="").execute()  # Removed the if condition to exit on any input
+                break
+
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
 
 
 #
