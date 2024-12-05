@@ -511,3 +511,30 @@ class GitWrapper:
             return self.repo.git.execute(['git'] + cmd)
         except GitCommandError as e:
             raise GitCommandError(f"Git command failed: {e}")
+
+    def log(self, *args):
+        """Execute git log command with the given arguments and return the output."""
+        try:
+            return self.repo.git.log(*args)
+        except GitCommandError as e:
+            self.console.print(f"[red]Error executing git log: {e}[/red]")
+            raise
+
+    def show(self, *args):
+        """Show various git objects (commits, files at specific revisions, etc).
+
+        Args:
+            *args: Variable arguments to pass to git show command
+
+        Returns:
+            The output of the git show command as a string
+
+        Example:
+            show('HEAD:file.txt') - Shows contents of file.txt at HEAD
+            show('abc123') - Shows commit abc123
+        """
+        try:
+            return self.repo.git.show(*args)
+        except GitCommandError as e:
+            self.console.print(f"[red]Error executing git show: {e}[/red]")
+            raise
