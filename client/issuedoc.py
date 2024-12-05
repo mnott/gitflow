@@ -19,6 +19,13 @@ from .docstyles import apply_styles_to_document
 import os
 import docx.opc
 import docx.opc.constants
+import requests
+from io import BytesIO
+from urllib.parse import urlparse
+import urllib3
+import certifi
+import tempfile
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 console = Console()
 
@@ -29,6 +36,7 @@ class IssueContent:
     title: str
     description: str
     children: List[int]  # List of child issue numbers
+    comments: List[Dict] = None  # Optional list of comments
 
 class IssueDocGenerator:
     """
@@ -67,13 +75,15 @@ class IssueDocGenerator:
         matches = re.finditer(r'#(\d+)', text)
         return [int(match.group(1)) for match in matches]
 
-    def _get_issue(self, number: int, progress, task_id) -> Optional[IssueContent]:
+    def _get_issue(self, number: int, progress, task_id, include_comments: bool = False) -> Optional[IssueContent]:
         """Fetch issue content using gh CLI."""
         if number in self.issues_cache:
             return self.issues_cache[number]
 
         try:
             progress.update(task_id, description=f"[blue]Fetching issue #{number}...")
+
+            # Fetch basic issue data
             result = subprocess.run(
                 ["gh", "issue", "view", str(number), "--json", "number,title,body"],
                 capture_output=True, text=True, check=True
@@ -81,11 +91,22 @@ class IssueDocGenerator:
             data = json.loads(result.stdout)
             children = self._extract_issue_numbers(data['body'])
 
+            # Fetch comments if requested
+            comments = None
+            if include_comments:
+                result = subprocess.run(
+                    ["gh", "issue", "view", str(number), "--json", "comments"],
+                    capture_output=True, text=True, check=True
+                )
+                comments_data = json.loads(result.stdout)
+                comments = comments_data.get('comments', [])
+
             issue = IssueContent(
                 number=data['number'],
                 title=data['title'],
                 description=data['body'],
-                children=children
+                children=children,
+                comments=comments
             )
 
             self.issues_cache[number] = issue
@@ -293,7 +314,8 @@ class IssueDocGenerator:
         content = re.sub(r'#(\d+)', replace_issue_ref, content)
         return content
 
-    def generate_doc(self, root_issue: int, max_depth: int = 1, max_issues: Optional[int] = None) -> Document:
+    def generate_doc(self, root_issue: int, max_depth: int = 1, max_issues: Optional[int] = None,
+                    include_comments: bool = False) -> Document:
         """Generate a Word document from the issue tree."""
         doc = Document()
         self.processed_count = 0
@@ -310,16 +332,17 @@ class IssueDocGenerator:
         ) as progress:
             # First, fetch all issues and create bookmarks
             fetch_task = progress.add_task("[blue]Fetching issues...", total=None)
-            self._fetch_all_issues(root_issue, max_depth, max_issues, progress, fetch_task)
+            self._fetch_all_issues(root_issue, max_depth, max_issues, progress, fetch_task, include_comments)
 
             # Then process the content
             process_task = progress.add_task("[blue]Processing content...", total=None)
-            self._process_issue_tree(root_issue, doc, 0, max_depth, progress, process_task, max_issues)
+            self._process_issue_tree(root_issue, doc, 0, max_depth, progress, process_task, max_issues, include_comments)
             progress.update(process_task, completed=True)
 
         return doc
 
-    def _fetch_all_issues(self, root_issue: int, max_depth: int, max_issues: Optional[int], progress, task_id):
+    def _fetch_all_issues(self, root_issue: int, max_depth: int, max_issues: Optional[int],
+                         progress, task_id, include_comments: bool = False):
         """Fetch all issues first to ensure we have complete data."""
         issues_to_fetch = [(root_issue, 0)]  # (issue_number, depth)
         fetched_issues = set()
@@ -327,7 +350,7 @@ class IssueDocGenerator:
         while issues_to_fetch and (max_issues is None or len(fetched_issues) < max_issues):
             current_issue, current_depth = issues_to_fetch.pop(0)  # Use FIFO order
             if current_issue not in fetched_issues:
-                issue = self._get_issue(current_issue, progress, task_id)
+                issue = self._get_issue(current_issue, progress, task_id, include_comments)
                 if issue:
                     fetched_issues.add(current_issue)
                     # Create a temporary paragraph to add bookmark
@@ -341,8 +364,71 @@ class IssueDocGenerator:
 
         progress.update(task_id, description=f"[blue]Fetched {len(fetched_issues)} issues")
 
+    def _add_image(self, doc, image_url: str):
+        """Download and add image to document."""
+        try:
+            # Handle GitHub images that require authentication
+            if 'github' in image_url:
+                # Create a temporary file that will be automatically cleaned up
+                with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                    # Use wget exactly as it works in terminal
+                    result = subprocess.run(
+                        ["wget", "-O", temp_file.name, "--no-check-certificate", image_url],
+                        capture_output=True, check=False
+                    )
+
+                    if result.returncode != 0:
+                        raise Exception(f"wget command failed: {result.stderr.decode()}")
+
+                    # Read the downloaded file
+                    with open(temp_file.name, 'rb') as f:
+                        image_data = f.read()
+
+                    # Clean up temp file
+                    os.unlink(temp_file.name)
+
+                    image_stream = BytesIO(image_data)
+            else:
+                response = requests.get(image_url)
+                response.raise_for_status()
+                image_stream = BytesIO(response.content)
+
+            # Add image in a table cell to create a frame
+            table = doc.add_table(rows=1, cols=1)
+            cell = table.cell(0, 0)
+
+            # Add the image to the cell
+            paragraph = cell.paragraphs[0]
+            run = paragraph.add_run()
+            run.add_picture(image_stream, width=Inches(6.0))
+
+            # Style the table/frame
+            table.style = 'Table Grid'
+            table.allow_autofit = False
+
+            # Add cell padding (margins)
+            for row in table.rows:
+                for cell in row.cells:
+                    cell.width = Inches(6.5)  # Slightly wider than image
+                    paragraph = cell.paragraphs[0]
+                    paragraph.paragraph_format.space_before = Pt(12)
+                    paragraph.paragraph_format.space_after = Pt(12)
+                    paragraph.paragraph_format.left_indent = Pt(12)
+                    paragraph.paragraph_format.right_indent = Pt(12)
+
+            # Add spacing after the table
+            paragraph = doc.add_paragraph()
+            paragraph.paragraph_format.space_after = Pt(12)
+
+        except Exception as e:
+            console.print(f"[red]Failed to add image from {image_url}: {str(e)}[/red]")
+            # Add a placeholder text for failed images
+            para = doc.add_paragraph(f"[Image could not be loaded: {image_url}]")
+            para.italic = True
+            para.paragraph_format.space_after = Pt(12)
+
     def _process_issue_tree(self, issue_num: int, doc: Document, current_depth: int, max_depth: int,
-                           progress, task_id, max_issues: Optional[int] = None):
+                           progress, task_id, max_issues: Optional[int] = None, include_comments: bool = False):
         """Recursively process issues and add content to document."""
         if current_depth > max_depth or issue_num in self.processed_issues:
             return
@@ -381,8 +467,13 @@ class IssueDocGenerator:
                                extensions=['fenced_code', 'codehilite', 'markdown.extensions.toc'])
         soup = BeautifulSoup(html, 'html.parser')
 
-        for element in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'ul', 'pre']):
-            if element.name.startswith('h'):
+        for element in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'ul', 'pre', 'img']):
+            if element.name == 'img':
+                # Handle image
+                image_url = element.get('src', '')
+                if image_url:
+                    self._add_image(doc, image_url)
+            elif element.name.startswith('h'):
                 level = int(element.name[1])  # Get number from h1, h2, etc.
                 # For subsequent documents at top level, don't add current_depth
                 if is_top_level and self.processed_count > 1:
@@ -441,11 +532,33 @@ class IssueDocGenerator:
                         if last_pos < len(text):
                             self._apply_body_style(para, text[last_pos:], is_bullet=True)
 
+        # Add comments if they exist and are requested
+        if include_comments and issue.comments:
+            comments_heading = doc.add_heading('Comments', level=heading_level + 1)
+            self._apply_heading_style(comments_heading, heading_level + 1)
+
+            for comment in issue.comments:
+                # Add comment metadata
+                meta_para = doc.add_paragraph()
+                meta_para.add_run(f"By {comment['author']['login']} on {comment['createdAt']}").italic = True
+
+                # Process comment body
+                comment_html = markdown.markdown(comment['body'],
+                                              extensions=['fenced_code', 'codehilite'])
+                comment_soup = BeautifulSoup(comment_html, 'html.parser')
+
+                # Add comment content
+                para = doc.add_paragraph()
+                self._apply_body_style(para, comment_soup.get_text())
+
+                # Add separator
+                doc.add_paragraph('---')
+
         # Process child issues
         if current_depth < max_depth and issue.children:
             progress.update(task_id, description=f"[blue]Processing children of issue #{issue_num}...")
             for child_num in issue.children:
-                self._process_issue_tree(child_num, doc, current_depth + 1, max_depth, progress, task_id, max_issues)
+                self._process_issue_tree(child_num, doc, current_depth + 1, max_depth, progress, task_id, max_issues, include_comments)
 
     def _get_relationship_id(self, part, url: str) -> str:
         """Get or create relationship ID for external URL."""
