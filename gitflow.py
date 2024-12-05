@@ -404,6 +404,7 @@ import os
 
 # Local imports
 from client import AIClient, GitConfig, DocGenerator, GitWrapper
+from client.issuedoc import IssueDocGenerator
 
 pretty.install()
 traceback.install()
@@ -1747,6 +1748,7 @@ def stash(
         console.print(f"[red]Error: {e}[/red]")
 
 
+
 #
 # Unstash
 #
@@ -1788,6 +1790,8 @@ def unstash(
             console.print(f"[green]Popped stash {stash_id}.[/green]")
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
+
 
 
 
@@ -3676,6 +3680,55 @@ def clone_issue(
         import traceback
         console.print(f"[red]Traceback: {traceback.format_exc()}[/red]")
 
+
+
+@app.command()
+def issue_doc(
+    issue: int = typer.Argument(..., help="Root issue number"),
+    depth: int = typer.Option(1, "-d", "--depth", help="Maximum depth to traverse (default: 1)"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output file path (default: issue_<number>_doc.docx)"),
+    max_issues: Optional[int] = typer.Option(None, "-m", "--max", help="Maximum number of issues to process (for testing)")
+):
+    """
+    Generate documentation from linked GitHub issues.
+
+    This command will:
+    1. Start with the specified root issue
+    2. Find all linked issues
+    3. Replace issue references with their titles
+    4. Generate a Word document with proper formatting
+    5. Save it to the specified output file
+
+    Parameters:
+    - issue : The root issue number to start from
+    - depth : Maximum depth to traverse when following issue links (default: 1)
+    - output: Output file path (default: issue_<number>_doc.docx)
+    - max   : Maximum number of issues to process (for testing)
+
+    Examples:
+    - Generate doc from issue #198 with default depth:
+        ./gitflow.py issue-doc 198
+    - Generate doc with depth 2 and custom output:
+        ./gitflow.py issue-doc 198 -d 2 -o cleanup_rules.docx
+    - Process only first 5 issues (for testing):
+        ./gitflow.py issue-doc 198 -d 2 -m 5
+    """
+    try:
+        generator = IssueDocGenerator()
+        doc = generator.generate_doc(issue, depth, max_issues)
+
+        # Save document
+        output_file = output or f"issue_{issue}_doc.docx"
+        doc.save(output_file)
+        console.print(f"[green]Documentation generated successfully: {output_file}[/green]")
+
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Error executing gh command: {e.stderr}[/red]")
+    except Exception as e:
+        console.print(f"[red]Error generating documentation: {e}[/red]")
+        console.print(f"[red]Error type: {type(e).__name__}[/red]")
+        import traceback
+        console.print(f"[red]Traceback: {traceback.format_exc()}[/red]")
 
 
 @app.command()
