@@ -3,7 +3,7 @@ from git import Repo, GitCommandError
 from InquirerPy import inquirer
 from pathlib import Path
 from rich.console import Console
-from typing import Optional
+from typing import Optional, Dict
 import subprocess
 import sys
 
@@ -195,6 +195,53 @@ class GitWrapper:
             self.console.print("[red]Error: Invalid branch configuration[/red]")
             return None
 
+    def set_branch_comment(self, branch: str, comment: str):
+        """Set a comment for a specific branch.
+
+        Args:
+            branch  (str): The name of the branch to comment on
+            comment (str): The comment to associate with the branch
+        """
+        config_key = f"branch.{branch}.comment"
+        try:
+            self.repo.git.config('--local', config_key, comment)
+            self.console.print(f"[green]Comment saved for branch '{branch}'[/green]")
+        except GitCommandError as e:
+            self.console.print(f"[red]Failed to save comment for branch '{branch}': {e}[/red]")
+
+    def get_branch_comment(self, branch: str) -> Optional[str]:
+        """Get the comment associated with a specific branch.
+
+        Args:
+            branch (str): The name of the branch to get the comment for
+
+        Returns:
+            Optional[str]: The comment if it exists, None otherwise
+        """
+        config_key = f"branch.{branch}.comment"
+        try:
+            return self.repo.git.config('--get', config_key)
+        except GitCommandError:
+            return None
+
+    def get_all_branch_comments(self) -> Dict[str, str]:
+        """Get all branch comments.
+
+        Returns:
+            Dict[str, str]: A dictionary mapping branch names to their comments
+        """
+        try:
+            # Get all branch.*.comment configurations
+            config_output = self.repo.git.config('--get-regexp', '^branch\..*\.comment$')
+            comments = {}
+            for line in config_output.splitlines():
+                key, comment = line.split(' ', 1)
+                branch = key.split('.')[1]  # Extract branch name from branch.<name>.comment
+                comments[branch] = comment
+            return comments
+        except GitCommandError:
+            return {}
+
     # -----------------------------------
     # Add, Pull, Push, Fetch, and Remote Operations
     # -----------------------------------
@@ -303,11 +350,12 @@ class GitWrapper:
         cmd_args = [command] + list(args)
         return self.repo.git.remote(*cmd_args)
 
+
     # -----------------------------------
     # Merge, Rebase, and Reset Operations
     # -----------------------------------
 
-    def merge(self, branch=None, squash=False, no_ff=True, commit=True, abort=False):
+    def merge(self, branch=None, squash=False, no_ff=True, ff_only=False, commit=True, abort=False):
         """Merge a branch into the current branch with various options."""
         args = []
 
@@ -318,7 +366,9 @@ class GitWrapper:
                 args.append('--squash')
             if not commit:
                 args.append('--no-commit')
-            if no_ff:
+            if ff_only:
+                args.append('--ff-only')
+            elif no_ff:
                 args.append('--no-ff')
             if branch:
                 args.append(branch)
@@ -329,12 +379,15 @@ class GitWrapper:
         """Find the common ancestor of two branches."""
         return self.repo.git.merge_base(base_branch, compare_branch)
 
-    def merge_to_target(self, source, target):
+    def merge_to_target(self, source, target, no_ff=True):
         """Merge the source branch into the target branch and push the changes."""
         self.console.print(f"[blue]Merging {source} into {target}...[/blue]")
         try:
             self.repo.git.checkout(target)
-            self.repo.git.merge(source, '--no-ff')
+            merge_args = [source]
+            if no_ff:
+                merge_args.append('--no-ff')
+            self.repo.git.merge(*merge_args)
             new_branch = self.push('origin', target)
             if new_branch:
                 self.console.print(f"[green]Pull request created to merge {source} into {target}[/green]")
@@ -359,6 +412,7 @@ class GitWrapper:
         if branch:
             args.append(branch)
         self.repo.git.execute(args)
+
 
     # -----------------------------------
     # Stashing Operations
