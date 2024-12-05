@@ -236,24 +236,50 @@ class IssueDocGenerator:
                             run.font.size = Pt(self.doc_styles.bullet_font_size)
                         run.font.color.rgb = RGBColor(128, 128, 128)
             else:
-                # Process remaining text for markdown links
+                # Convert to HTML to handle links
                 html = markdown.markdown(part)
                 soup = BeautifulSoup(html, 'html.parser')
 
-                # Handle links first
+                # Process text with links
+                current_pos = 0
+                text = soup.get_text()
+
+                # Find all links and their positions
+                links = []
                 for link in soup.find_all('a'):
                     url = link.get('href', '')
                     link_text = link.get_text()
-                    link.extract()
-                    self._create_external_hyperlink(paragraph, link_text, url, is_bullet)
+                    # Find position in the text
+                    start = text.find(link_text, current_pos)
+                    if start != -1:
+                        links.append({
+                            'url': url,
+                            'text': link_text,
+                            'position': start
+                        })
+                        current_pos = start + len(link_text)
 
-                # Now handle remaining text
-                remaining_text = soup.get_text().strip()
-                if remaining_text:
-                    run = paragraph.add_run(remaining_text)
-                    if is_bullet:
-                        run.font.size = Pt(self.doc_styles.bullet_font_size)
-                    run.font.color.rgb = RGBColor(0, 0, 0)
+                # Add text with links
+                last_pos = 0
+                for link in sorted(links, key=lambda x: x['position']):
+                    # Add text before link
+                    if link['position'] > last_pos:
+                        pre_link_text = text[last_pos:link['position']]
+                        if pre_link_text:
+                            run = paragraph.add_run(pre_link_text)
+                            if is_bullet:
+                                run.font.size = Pt(self.doc_styles.bullet_font_size)
+                    # Add link
+                    self._create_external_hyperlink(paragraph, link['text'], link['url'], is_bullet)
+                    last_pos = link['position'] + len(link['text'])
+
+                # Add remaining text
+                if last_pos < len(text):
+                    remaining_text = text[last_pos:]
+                    if remaining_text:
+                        run = paragraph.add_run(remaining_text)
+                        if is_bullet:
+                            run.font.size = Pt(self.doc_styles.bullet_font_size)
 
     def _apply_code_style(self, paragraph, text):
         """Apply code block styling."""
@@ -467,6 +493,41 @@ class IssueDocGenerator:
                                extensions=['fenced_code', 'codehilite', 'markdown.extensions.toc'])
         soup = BeautifulSoup(html, 'html.parser')
 
+        def process_element_with_links(element, paragraph, is_bullet=False):
+            """Helper function to process text with links consistently."""
+            # Get the raw HTML content to preserve links
+            html_content = str(element)
+            item_soup = BeautifulSoup(html_content, 'html.parser')
+
+            # Find all links and their positions
+            links = []
+            for link in item_soup.find_all('a'):
+                # Get the text before this link
+                text_before = ''.join(t.string or '' for t in link.previous_siblings)
+                links.append({
+                    'url': link.get('href', ''),
+                    'text': link.get_text(),
+                    'position': len(text_before)
+                })
+                # Remove the link but keep its text
+                link.unwrap()
+
+            # Process the full text
+            text = self._process_issue_content(item_soup.get_text().strip(), current_depth)
+            if text.strip():
+                # Split text at link positions and add pieces with links
+                last_pos = 0
+                for link in sorted(links, key=lambda x: x['position']):
+                    # Add text before link
+                    if link['position'] > last_pos:
+                        self._apply_body_style(paragraph, text[last_pos:link['position']], is_bullet=is_bullet)
+                    # Add link
+                    self._create_external_hyperlink(paragraph, link['text'], link['url'], is_bullet=is_bullet)
+                    last_pos = link['position'] + len(link['text'])
+                # Add remaining text
+                if last_pos < len(text):
+                    self._apply_body_style(paragraph, text[last_pos:], is_bullet=is_bullet)
+
         for element in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'ul', 'pre', 'img']):
             if element.name == 'img':
                 # Handle image
@@ -483,82 +544,48 @@ class IssueDocGenerator:
                 heading = doc.add_heading(element.get_text(), level=effective_level)
                 self._apply_heading_style(heading, effective_level)
             elif element.name == 'pre':
-                # Handle code blocks (remains the same)
-                code = element.find('code')
-                if code:
-                    doc.add_paragraph()
-                    para = doc.add_paragraph()
-                    self._apply_code_style(para, code.get_text())
-                    doc.add_paragraph()
-            elif element.name == 'p':
-                para = doc.add_paragraph()
-                text = self._process_issue_content(element.get_text(), current_depth)
-                self._apply_body_style(para, text)
+                # Handle code blocks
+                paragraph = doc.add_paragraph()
+                self._apply_code_style(paragraph, element.get_text())
             elif element.name == 'ul':
                 for li in element.find_all('li'):
-                    para = doc.add_paragraph(style='List Bullet')
-                    # Get the raw HTML content to preserve links
-                    html_content = str(li)
+                    paragraph = doc.add_paragraph(style='List Bullet')
+                    process_element_with_links(li, paragraph, is_bullet=True)
+            elif element.name == 'p':
+                # Handle paragraphs with potential links
+                paragraph = doc.add_paragraph()
+                process_element_with_links(element, paragraph, is_bullet=False)
 
-                    # Convert to BeautifulSoup to handle links
-                    item_soup = BeautifulSoup(html_content, 'html.parser')
-
-                    # Find all links and their positions
-                    links = []
-                    for link in item_soup.find_all('a'):
-                        # Get the text before this link
-                        text_before = ''.join(t.string or '' for t in link.previous_siblings)
-                        links.append({
-                            'url': link.get('href', ''),
-                            'text': link.get_text(),
-                            'position': len(text_before)
-                        })
-                        # Remove the link but keep its text
-                        link.unwrap()
-
-                    # Process the full text
-                    text = self._process_issue_content(item_soup.get_text().strip(), current_depth)
-                    if text.strip():
-                        # Split text at link positions and add pieces with links
-                        last_pos = 0
-                        for link in sorted(links, key=lambda x: x['position']):
-                            # Add text before link
-                            if link['position'] > last_pos:
-                                self._apply_body_style(para, text[last_pos:link['position']], is_bullet=True)
-                            # Add link
-                            self._create_external_hyperlink(para, link['text'], link['url'], is_bullet=True)
-                            last_pos = link['position'] + len(link['text'])
-                        # Add remaining text
-                        if last_pos < len(text):
-                            self._apply_body_style(para, text[last_pos:], is_bullet=True)
-
-        # Add comments if they exist and are requested
+        # Add comments if requested
         if include_comments and issue.comments:
-            comments_heading = doc.add_heading('Comments', level=heading_level + 1)
-            self._apply_heading_style(comments_heading, heading_level + 1)
+            comments_heading = doc.add_heading('Comments', level=min(current_depth + 2, 4))
+            self._apply_heading_style(comments_heading, min(current_depth + 2, 4))
 
             for comment in issue.comments:
-                # Add comment metadata
-                meta_para = doc.add_paragraph()
-                meta_para.add_run(f"By {comment['author']['login']} on {comment['createdAt']}").italic = True
-
-                # Process comment body
+                # Convert comment body to HTML
                 comment_html = markdown.markdown(comment['body'],
                                               extensions=['fenced_code', 'codehilite'])
                 comment_soup = BeautifulSoup(comment_html, 'html.parser')
 
-                # Add comment content
-                para = doc.add_paragraph()
-                self._apply_body_style(para, comment_soup.get_text())
+                # Process each element in the comment
+                for comment_element in comment_soup.find_all(['p', 'pre', 'ul']):
+                    if comment_element.name == 'pre':
+                        paragraph = doc.add_paragraph()
+                        self._apply_code_style(paragraph, comment_element.get_text())
+                    elif comment_element.name == 'ul':
+                        for li in comment_element.find_all('li'):
+                            paragraph = doc.add_paragraph(style='List Bullet')
+                            process_element_with_links(li, paragraph, is_bullet=True)
+                    else:
+                        paragraph = doc.add_paragraph()
+                        process_element_with_links(comment_element, paragraph, is_bullet=False)
 
-                # Add separator
-                doc.add_paragraph('---')
-
-        # Process child issues
-        if current_depth < max_depth and issue.children:
-            progress.update(task_id, description=f"[blue]Processing children of issue #{issue_num}...")
+        # Process child issues if within depth limit
+        if current_depth < max_depth:
             for child_num in issue.children:
-                self._process_issue_tree(child_num, doc, current_depth + 1, max_depth, progress, task_id, max_issues, include_comments)
+                if child_num not in self.processed_issues:
+                    self._process_issue_tree(child_num, doc, current_depth + 1, max_depth,
+                                          progress, task_id, max_issues, include_comments)
 
     def _get_relationship_id(self, part, url: str) -> str:
         """Get or create relationship ID for external URL."""
