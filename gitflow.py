@@ -1142,23 +1142,39 @@ def update(
 @app.command()
 def ls():
     """
-    List all branches, including both local and remote.
+    List all branches, including both local and remote, with their comments if available.
 
     Examples:
     - List all branches:
         ./gitflow.py ls
     """
     git_wrapper.fetch('--all', '--prune')
-    local_branches  = git_wrapper.get_local_branches()
+    local_branches = git_wrapper.get_local_branches()
     remote_branches = git_wrapper.get_remote_branches()
+    branch_comments = git_wrapper.get_all_branch_comments()
 
-    console.print("[cyan]Local branches:[/cyan]")
+    # Create table for local branches
+    local_table = Table(title="Local branches", box=box.ROUNDED)
+    local_table.add_column("Branch", style="cyan")
+    local_table.add_column("Comment", style="green")
+
     for branch in local_branches:
-        console.print(f"  - {branch}")
+        comment = branch_comments.get(branch, "")
+        local_table.add_row(branch, comment)
 
-    console.print("[cyan]Remote branches:[/cyan]")
+    # Create table for remote branches
+    remote_table = Table(title="Remote branches", box=box.ROUNDED)
+    remote_table.add_column("Branch", style="cyan")
+    remote_table.add_column("Comment", style="green")
+
     for branch in remote_branches:
-        console.print(f"  - {branch}")
+        branch_name = branch.replace('origin/', '')
+        comment = branch_comments.get(branch_name, "")
+        remote_table.add_row(branch, comment)
+
+    console.print(local_table)
+    console.print("\n")
+    console.print(remote_table)
 
 
 #
