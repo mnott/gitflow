@@ -3806,6 +3806,81 @@ def log(
         console.print(f"[red]Error: {e}[/red]")
 
 
+# Add this command after the 'mv' command and before the 'add' command
+
+@app.command()
+def comment(
+    branch: Optional[str] = typer.Argument(None, help="The branch to comment on"),
+    message: Optional[str] = typer.Option(None, "-m", "--message", help="The comment to set"),
+    list: bool = typer.Option(False, "-l", "--list", help="List all branch comments"),
+    delete: bool = typer.Option(False, "-d", "--delete", help="Delete the comment for the specified branch")
+):
+    """
+    Set, get, list or delete comments for branches.
+
+    Parameters:
+    - branch : The branch to comment on. If not specified, uses current branch.
+    - message: The comment to set. If not specified, shows current comment.
+    - list   : List all branch comments.
+    - delete : Delete the comment for the specified branch.
+
+    Examples:
+    - Set a comment for current branch:
+        ./gitflow.py comment -m "Feature branch for UI redesign"
+    - Set a comment for specific branch:
+        ./gitflow.py comment feature/new-ui -m "UI redesign implementation"
+    - View comment for current branch:
+        ./gitflow.py comment
+    - View comment for specific branch:
+        ./gitflow.py comment feature/new-ui
+    - List all branch comments:
+        ./gitflow.py comment --list
+    - Delete comment for current branch:
+        ./gitflow.py comment --delete
+    """
+    try:
+        git_wrapper = GitWrapper()
+
+        if list:
+            comments = git_wrapper.get_all_branch_comments()
+            if comments:
+                table = Table(title="Branch Comments")
+                table.add_column("Branch", style="cyan")
+                table.add_column("Comment", style="green")
+
+                for branch_name, comment in comments.items():
+                    table.add_row(branch_name, comment)
+
+                console.print(table)
+            else:
+                console.print("[yellow]No branch comments found.[/yellow]")
+            return
+
+        # If no branch specified, use current branch
+        if not branch:
+            branch = git_wrapper.get_current_branch()
+
+        if delete:
+            # Delete comment by setting it to empty string
+            git_wrapper.set_branch_comment(branch, "")
+            console.print(f"[green]Deleted comment for branch '{branch}'[/green]")
+            return
+
+        if message:
+            # Set new comment
+            git_wrapper.set_branch_comment(branch, message)
+        else:
+            # Show current comment
+            comment = git_wrapper.get_branch_comment(branch)
+            if comment:
+                console.print(f"[green]Comment for branch '{branch}':[/green] {comment}")
+            else:
+                console.print(f"[yellow]No comment found for branch '{branch}'[/yellow]")
+
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
 #
 # Command: Doc
 #

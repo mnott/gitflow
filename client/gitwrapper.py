@@ -3,7 +3,7 @@ from git import Repo, GitCommandError
 from InquirerPy import inquirer
 from pathlib import Path
 from rich.console import Console
-from typing import Optional
+from typing import Optional, Dict
 import subprocess
 import sys
 
@@ -194,6 +194,53 @@ class GitWrapper:
         else:
             self.console.print("[red]Error: Invalid branch configuration[/red]")
             return None
+
+    def set_branch_comment(self, branch: str, comment: str):
+        """Set a comment for a specific branch.
+
+        Args:
+            branch  (str): The name of the branch to comment on
+            comment (str): The comment to associate with the branch
+        """
+        config_key = f"branch.{branch}.comment"
+        try:
+            self.repo.git.config('--local', config_key, comment)
+            self.console.print(f"[green]Comment saved for branch '{branch}'[/green]")
+        except GitCommandError as e:
+            self.console.print(f"[red]Failed to save comment for branch '{branch}': {e}[/red]")
+
+    def get_branch_comment(self, branch: str) -> Optional[str]:
+        """Get the comment associated with a specific branch.
+
+        Args:
+            branch (str): The name of the branch to get the comment for
+
+        Returns:
+            Optional[str]: The comment if it exists, None otherwise
+        """
+        config_key = f"branch.{branch}.comment"
+        try:
+            return self.repo.git.config('--get', config_key)
+        except GitCommandError:
+            return None
+
+    def get_all_branch_comments(self) -> Dict[str, str]:
+        """Get all branch comments.
+
+        Returns:
+            Dict[str, str]: A dictionary mapping branch names to their comments
+        """
+        try:
+            # Get all branch.*.comment configurations
+            config_output = self.repo.git.config('--get-regexp', '^branch\..*\.comment$')
+            comments = {}
+            for line in config_output.splitlines():
+                key, comment = line.split(' ', 1)
+                branch = key.split('.')[1]  # Extract branch name from branch.<name>.comment
+                comments[branch] = comment
+            return comments
+        except GitCommandError:
+            return {}
 
     # -----------------------------------
     # Add, Pull, Push, Fetch, and Remote Operations
