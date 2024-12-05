@@ -232,7 +232,7 @@ class GitWrapper:
         """
         try:
             # Get all branch.*.comment configurations
-            config_output = self.repo.git.config('--get-regexp', '^branch\..*\.comment$')
+            config_output = self.repo.git.config('--get-regexp', r'^branch\..*\.comment$')
             comments = {}
             for line in config_output.splitlines():
                 key, comment = line.split(' ', 1)
