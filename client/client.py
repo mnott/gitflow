@@ -8,11 +8,12 @@ selection, configuration management, and API interactions.
 
 from InquirerPy import inquirer
 from rich.console import Console
-from typing import Optional
+from typing import Optional, Dict
 import re
 import requests
 import sys
 from .gitconfig import GitConfig
+from .gitwrapper import GitWrapper
 
 console = Console()
 
@@ -191,3 +192,34 @@ class AIClient:
         self.config_provider.configure_provider(provider_name)
         self.ai = provider_name
         self.load_provider_metadata()
+
+    def set_branch_comment(self, branch: str, comment: str):
+        """Set a comment for a specific branch.
+
+        Args:
+            branch  (str): The name of the branch to comment on
+            comment (str): The comment to associate with the branch
+        """
+        git = GitWrapper()
+        git.set_branch_comment(branch, comment)
+
+    def get_branch_comment(self, branch: str) -> Optional[str]:
+        """Get the comment associated with a specific branch.
+
+        Args:
+            branch (str): The name of the branch to get the comment for
+
+        Returns:
+            Optional[str]: The comment if it exists, None otherwise
+        """
+        git = GitWrapper()
+        return git.get_branch_comment(branch)
+
+    def get_all_branch_comments(self) -> Dict[str, str]:
+        """Get all branch comments.
+
+        Returns:
+            Dict[str, str]: A dictionary mapping branch names to their comments
+        """
+        git = GitWrapper()
+        return git.get_all_branch_comments()
