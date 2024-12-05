@@ -2069,19 +2069,44 @@ def explain(
 
         # Use the AI client to generate the explanation
         ai_client = AIClient(config_provider=GitConfig())
-
         current_provider = ai_client.get_current_provider_name()
-        print(f"Generating a commit message using: {current_provider}")
 
-        generated_message = ai_client.prompt(prompt)
-
-        if as_command:
-            # Function was called as a command
-            console.print("[green]Generated explanation:[/green]")
-            console.print(generated_message)
+        # Determine the appropriate message based on the command context
+        if improve:
+            action_msg = "Analyzing code and generating improvement suggestions"
+        elif summary:
+            action_msg = "Analyzing code and generating summary"
+        elif daily_summary:
+            action_msg = "Analyzing commit history and generating daily summary"
+        elif commit or start or end or days:
+            action_msg = "Analyzing commit history and generating explanation"
         else:
-            # Function was called programmatically
-            return generated_message
+            action_msg = "Analyzing changes and generating explanation"
+
+        # Show spinner while generating content
+        with console.status(f"[bold blue]{action_msg} using {current_provider}...") as status:
+            generated_message = ai_client.prompt(prompt)
+
+            if as_command:
+                # Get repository URL for clickable links
+                repo_url = git_wrapper.get_remote_url()
+                if repo_url.endswith('.git'):
+                    repo_url = repo_url[:-4]
+
+                # Process the message to add clickable links
+                processed_message = ""
+                for line in generated_message.split('\n'):
+                    if "- Commit: " in line:
+                        commit_hash = line.split("- Commit: ")[1].strip()
+                        processed_line = f"- Commit: [link={repo_url}/commit/{commit_hash}]{commit_hash}[/link]"
+                        processed_message += processed_line + "\n"
+                    else:
+                        processed_message += line + "\n"
+
+                console.print("[green]Generated explanation:[/green]")
+                console.print(processed_message)
+            else:
+                return generated_message
 
     except Exception as e:
         console.print(f"[red]Error generating explanation: {e}[/red]")
@@ -2200,6 +2225,12 @@ def prompt_files_daily_summary(file_contents, file_histories):
 
 
 def prompt_files_details(file_contents, file_histories):
+    """Generate a prompt for explaining file histories with clickable commit links."""
+    # Get repository URL for clickable links
+    repo_url = git_wrapper.get_remote_url()
+    if repo_url.endswith('.git'):
+        repo_url = repo_url[:-4]
+
     prompt = f"""
     Explain the development history of the following file(s) over time.
     For each significant change, provide:
@@ -2221,6 +2252,7 @@ def prompt_files_details(file_contents, file_histories):
     - Separate sections with a blank line.
     - Do not use asterisks (*) for headlines or emphasis.
     - If the description is the same as the commit message, do not repeat it.
+    - Format commit lines exactly as: "- Commit: HASH" (7 characters)
 
     Example structure:
 
