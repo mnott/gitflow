@@ -1764,8 +1764,6 @@ def stash(
         console.print(f"[red]Error: {e}[/red]")
 
 
-
-
 #
 # Unstash
 #
@@ -1839,42 +1837,52 @@ def commit(
             _commit(message, body, add_all, interactive, False, files)
             return
 
+        # First handle any unstaged changes
+        if git_wrapper.is_dirty(untracked_files=True):
+            if add_all or inquirer.confirm(message="Do you want to stage all changes?", default=True).execute():
+                git_wrapper.add(all=True)
+                wip_message = message if message else "WIP: Changes to be squashed"
+                git_wrapper.commit(wip_message)
+                console.print("[green]Auto-committed changes for squashing[/green]")
+
         current_branch = git_wrapper.get_current_branch()
 
-        # Handle unstaged changes - auto commit for squash
-        if git_wrapper.is_dirty(untracked_files=True):
-            git_wrapper.add(all=True)
-            git_wrapper.commit("WIP: Changes to be squashed")
-            console.print("[green]Auto-committed changes for squashing[/green]")
-
-        # Try to find the branch point
+        # Get the merge base with develop or main to find branch point
         try:
-            # First try with origin/HEAD (main branch)
-            merge_base = git_wrapper.merge_base("HEAD", "origin/HEAD")
+            base_commit = git_wrapper.merge_base("HEAD", "develop")
         except GitCommandError:
-            # If that fails, try with origin/main
             try:
-                merge_base = git_wrapper.merge_base("HEAD", "origin/main")
+                base_commit = git_wrapper.merge_base("HEAD", "main")
             except GitCommandError:
-                # If that fails too, just get recent commits
-                merge_base = None
+                base_commit = None
 
-        # Get commits since branch point or recent commits if no branch point found
-        if merge_base:
-            commits = git_wrapper.log(f"{merge_base}..HEAD", "--oneline").splitlines()
+        # Get commits only since branch point, excluding merge commits
+        if base_commit:
+            commits = git_wrapper.log(f"{base_commit}..HEAD", "--oneline", "--no-merges").splitlines()
         else:
-            commits = git_wrapper.log("HEAD", "--oneline", "-n", "10").splitlines()
+            commits = git_wrapper.log("HEAD", "--oneline", "--no-merges", "-n", "10").splitlines()
 
+        # Filter out commits that are already on any remote branch
         try:
-            remote_commit = git_wrapper.rev_parse(f"origin/{current_branch}")
-            # Filter commits to only show those after the remote commit
-            commits = [c for c in commits if git_wrapper.rev_list(f"{remote_commit}..{c.split()[0]}").strip() != ""]
+            # First check current branch's remote
+            try:
+                remote_commit = git_wrapper.execute_git_command(['rev-parse', f"origin/{current_branch}"])
+                commits = [c for c in commits if git_wrapper.rev_list(f"{remote_commit}..{c.split()[0]}").strip() != ""]
+            except GitCommandError:
+                pass  # Current branch might not be on remote yet
+
+            # Then check develop and main
+            for remote_branch in ["develop", "main"]:
+                try:
+                    remote_commit = git_wrapper.execute_git_command(['rev-parse', f"origin/{remote_branch}"])
+                    commits = [c for c in commits if git_wrapper.rev_list(f"{remote_commit}..{c.split()[0]}").strip() != ""]
+                except GitCommandError:
+                    pass  # Skip if remote branch doesn't exist
         except GitCommandError:
-            # If no remote branch exists, keep all commits
-            pass
+            pass  # Silently ignore if remote access fails
 
         if not commits:
-            console.print("[yellow]No unpushed commits to squash.[/yellow]")
+            console.print("[yellow]No commits available for squashing.[/yellow]")
             return
 
         selected = inquirer.select(
@@ -1892,7 +1900,8 @@ def commit(
         for commit_msg in commits_to_squash:
             console.print(commit_msg)
 
-        if not inquirer.confirm(message="Do you want to squash these commits?", default=True).execute():
+        # Only ask for confirmation if there's more than one commit
+        if len(commits_to_squash) > 1 and not inquirer.confirm(message="Do you want to squash these commits?", default=True).execute():
             return
 
         # Perform the squash
@@ -2056,6 +2065,12 @@ def get_manual_commit_message(message, body):
     full_commit_message = message
     if body:
         full_commit_message += "\n\n" + split_message_body(body)
+
+    # Show the message that will be used
+    console.print(f"[blue]Commit message:[/blue]\n{full_commit_message}")
+
+    if not inquirer.confirm(message="Do you want to use this commit message?", default=True).execute():
+        return get_manual_commit_message(None, None)  # Start over if they don't want to use this message
 
     return full_commit_message
 
