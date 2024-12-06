@@ -592,3 +592,62 @@ class GitWrapper:
         except GitCommandError as e:
             self.console.print(f"[red]Error executing git show: {e}[/red]")
             raise
+
+    def safe_checkout(self, target_branch: str, create: bool = False, start_point: Optional[str] = None) -> bool:
+        """
+        Safely checkout a branch, handling any uncommitted changes.
+
+        Args:
+            target_branch: The branch to checkout
+            create: Whether to create a new branch
+            start_point: Optional starting point for new branch
+
+        Returns:
+            bool: True if checkout was successful, False otherwise
+        """
+        try:
+            # Check if we're already on the target branch
+            if self.get_current_branch() == target_branch:
+                return True
+
+            # If there are uncommitted changes
+            if self.is_dirty(untracked_files=True):
+                # Stash changes with a descriptive message
+                current_branch = self.get_current_branch()
+                stash_message = f"Auto-stash before checkout from {current_branch} to {target_branch}"
+                self.stash('push', '-m', stash_message)
+
+                try:
+                    # Perform the checkout
+                    if create:
+                        self.checkout(target_branch, start_point=start_point, create=True)
+                    else:
+                        self.checkout(target_branch)
+
+                    # Try to apply the stashed changes
+                    try:
+                        self.stash('pop')
+                        return True
+                    except GitCommandError as e:
+                        if "conflict" in str(e).lower():
+                            # If there are conflicts, stash again and inform user
+                            self.stash('push', '-m', f"Conflicted changes from {current_branch}")
+                            self.console.print(f"[yellow]Changes were stashed due to conflicts. Use 'git stash list' to find them.[/yellow]")
+                        return False
+
+                except GitCommandError:
+                    # If checkout fails, try to restore original state
+                    self.stash('pop')
+                    return False
+
+            else:
+                # No uncommitted changes, simple checkout
+                if create:
+                    self.checkout(target_branch, start_point=start_point, create=True)
+                else:
+                    self.checkout(target_branch)
+                return True
+
+        except GitCommandError as e:
+            self.console.print(f"[red]Error during checkout: {e}[/red]")
+            return False

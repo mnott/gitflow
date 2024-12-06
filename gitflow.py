@@ -1183,21 +1183,23 @@ def ls():
 #
 @app.command()
 def checkout(
-    target: Optional[str] = typer.Argument(None,                   help="The branch to switch to, or file/directory to revert"),
-    force:  bool          = typer.Option  (False, "-f", "--force", help="Force checkout, discarding local changes")
+    target: Optional[str] = typer.Argument(None, help="The branch to switch to, or file/directory to revert"),
+    force: bool = typer.Option(False, "-f", "--force", help="Force checkout, discarding local changes"),
+    new: bool = typer.Option(False, "-b", "--new", help="Create and switch to a new branch")
 ):
     """
     Switch to a different branch or revert changes in files/directories.
+    Automatically handles uncommitted changes by stashing and reapplying them.
 
     Examples:
     - Switch to a different branch interactively:
         ./gitflow.py checkout
     - Switch to a specific branch:
         ./gitflow.py checkout develop
+    - Create and switch to a new branch:
+        ./gitflow.py checkout -b feature/new-feature
     - Revert changes in a file:
         ./gitflow.py checkout -- filename.txt
-    - Revert all changes in the current directory:
-        ./gitflow.py checkout .
     - Force checkout to a branch, discarding local changes:
         ./gitflow.py checkout develop -f
     """
@@ -1224,43 +1226,26 @@ def checkout(
 
         # Check if target is a branch
         if target in git_wrapper.get_branches() or (not offline and target.startswith("origin/")):
-            # Check if there are uncommitted changes
-            if git_wrapper.is_dirty(untracked_files=True) and not force:
-                action = inquirer.select(
-                    message="You have uncommitted changes. What would you like to do?",
-                    choices=[
-                        "Stash changes",
-                        "Continue without stashing",
-                        "Abort"
-                    ]
-                ).execute()
-
-                if action == "Stash changes":
-                    git_wrapper.stash('push')
-                    console.print("[green]Changes stashed.[/green]")
-                elif action == "Abort":
-                    console.print("[yellow]Operation aborted.[/yellow]")
-                    return
-
-            # Switch to the branch
-            try:
+            if force:
+                git_wrapper.checkout(target, force=True)
+                console.print(f"[green]Switched to branch {target.split('/')[-1]}[/green]")
+            else:
+                # Use safe_checkout for handling uncommitted changes
                 if not offline and target.startswith("origin/"):
-                    # For remote branches, create a new local branch
                     local_branch_name = target.split("/", 1)[1]
                     if local_branch_name not in git_wrapper.get_branches():
-                        git_wrapper.checkout(local_branch_name, target, create=True)
+                        success = git_wrapper.safe_checkout(local_branch_name, create=True, start_point=target)
                     else:
-                        git_wrapper.checkout(local_branch_name)
+                        success = git_wrapper.safe_checkout(local_branch_name)
                         if not offline:
                             git_wrapper.pull('origin', local_branch_name)
                 else:
-                    if force:
-                        git_wrapper.checkout(target, force=True)
-                    else:
-                        git_wrapper.checkout(target)
-                console.print(f"[green]Switched to branch {target.split('/')[-1]}[/green]")
-            except GitCommandError as e:
-                console.print(f"[red]Error: {e}[/red]")
+                    success = git_wrapper.safe_checkout(target, create=new)
+
+                if success:
+                    console.print(f"[green]Switched to branch {target.split('/')[-1]}[/green]")
+                else:
+                    console.print("[yellow]Checkout completed but there might be stashed changes to resolve.[/yellow]")
         else:
             # Revert changes in file or directory
             try:
@@ -1275,17 +1260,6 @@ def checkout(
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
-
-    # If changes were stashed, ask if the user wants to pop them
-    if 'action' in locals() and action == "Stash changes":
-        pop_stash = inquirer.confirm(message="Do you want to pop the stashed changes?", default=True).execute()
-        if pop_stash:
-            try:
-                git_wrapper.stash('pop')
-                console.print("[green]Stashed changes reapplied.[/green]")
-            except GitCommandError as e:
-                console.print(f"[red]Error reapplying stashed changes: {e}[/red]")
-                console.print("[yellow]Your changes are still in the stash. You may need to manually resolve conflicts.[/yellow]")
 
 
 #
@@ -1746,6 +1720,7 @@ def stash(
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
 
 
 
