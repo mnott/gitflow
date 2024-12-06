@@ -2725,25 +2725,29 @@ def continue_merge():
 def push(
     branch:    Optional[str] = typer.Argument(None,                   help="The branch to push changes to"),
     force:     bool          = typer.Option  (False, "-f", "--force", help="Force push changes"),
-    create_pr: bool          = typer.Option  (False, "-p", "--pr",    help="Create a pull request instead of pushing directly")
+    create_pr: bool          = typer.Option  (False, "-p", "--pr",    help="Create a pull request instead of pushing directly"),
+    squash:    bool          = typer.Option  (True,  "-s", "--squash", help="Squash all local commits before pushing"),
+    message:   Optional[str] = typer.Option  (None,  "-m", "--message", help="Commit message for squashed commits")
 ):
     """
     Push the committed changes to the remote repository. If the branch is protected, create a pull request.
+    Can optionally squash all local commits before pushing.
 
     Parameters:
     - branch   : The branch to push changes to. If not specified, the current branch will be used.
     - force    : Force push the changes.
     - create_pr: Create a pull request instead of pushing directly.
+    - squash   : Squash all local commits that haven't been pushed yet into a single commit.
+    - message  : Commit message for squashed commits. If not provided, will prompt or use AI.
 
     Examples:
     - Push changes to the current branch:
         ./gitflow.py push
-    - Force push changes to a specific branch:
-        ./gitflow.py push feature/new-feature -f
-    - Create a pull request instead of pushing:
-        ./gitflow.py push -p
+    - Squash local commits and push:
+        ./gitflow.py push --squash
+    - Squash with a specific message:
+        ./gitflow.py push --squash -m "feat: implement new feature"
     """
-
     try:
         # Use the current branch if no branch is provided
         if branch is None:
@@ -2751,7 +2755,7 @@ def push(
 
         current_branch = git_wrapper.get_current_branch()
 
-        # Check for unstaged changes
+        # Check for unstaged changes first
         if git_wrapper.is_dirty(untracked_files=True):
             console.print("[yellow]You have unstaged changes.[/yellow]")
             action = inquirer.select(
@@ -2782,73 +2786,107 @@ def push(
             # Use our custom fetch function
             fetch(remote="origin", branch=None, all_remotes=False, prune=False)
 
-            # Check if there are differences between local and remote
-            changes_made = False
-            try:
-                print(f"[blue]Checking differences between {branch} and origin/{branch}[/blue]")
-                ahead_behind = git_wrapper.rev_list('--left-right', '--count', f'origin/{branch}...HEAD').split()
-                behind = int(ahead_behind[0])
-                ahead = int(ahead_behind[1])
+            # Get number of commits ahead/behind
+            ahead_behind = git_wrapper.rev_list('--left-right', '--count', f'origin/{branch}...HEAD').split()
+            behind = int(ahead_behind[0])
+            ahead = int(ahead_behind[1])
 
-                if ahead > 0:
-                    console.print(f"[yellow]Your local branch is {ahead} commit(s) ahead of the remote branch.[/yellow]")
-                    changes_made = True
-                elif behind > 0:
-                    console.print(f"[yellow]Your local branch is {behind} commit(s) behind the remote branch.[/yellow]")
-                    if not force:
-                        action = inquirer.select(
-                            message="How would you like to proceed?",
-                            choices=[
-                                "Pull and rebase",
-                                "Force push",
-                                "Create pull request",
-                                "Abort"
-                            ]
+            if ahead > 0:
+                if squash:
+                    # Get the commit message for squashed commits
+                    if message is None:
+                        # Get the diff of all commits we're ahead by
+                        diff = git_wrapper.get_diff(f'origin/{branch}..HEAD')
+
+                        # Also get the commit messages we're squashing
+                        commit_messages = git_wrapper.log(
+                            f'origin/{branch}..HEAD',
+                            '--pretty=format:%s%n%b'
+                        )
+
+                        # Combine both for AI context
+                        ai_context = f"""
+                        Commits being squashed:
+
+                        {commit_messages}
+
+                        Changes:
+
+                        {diff}
+                        """
+
+                        # Ask if user wants to use AI for the squash commit message
+                        use_ai = inquirer.confirm(
+                            message="Do you want to use AI to generate a commit message for the squashed commits?",
+                            default=True
                         ).execute()
-                        if action == "Pull and rebase":
-                            git_wrapper.pull('--rebase', 'origin', branch)
-                        elif action == "Force push":
-                            force = True
-                        elif action == "Create pull request":
-                            create_pr = True
+
+                        if use_ai:
+                            message = explain(
+                                files=None,
+                                commit=None,
+                                start=None,
+                                end=None,
+                                as_command=False,
+                                days=None,
+                                daily_summary=False,
+                                summary=False,
+                                improve=False,
+                                custom_prompt=f"Generate a commit message for these squashed commits:\n\n{ai_context}",
+                                examples=False
+                            )
                         else:
-                            console.print("[yellow]Push aborted.[/yellow]")
-                            return
+                            message = get_manual_commit_message(None, None)
+
+                    # Perform the squash
+                    current_head = git_wrapper.rev_parse('HEAD')
+                    merge_base = git_wrapper.merge_base(f'origin/{branch}', 'HEAD')
+
+                    # Reset to the last pushed commit
+                    git_wrapper.reset('soft', merge_base)
+
+                    # Create a new commit with all the changes
+                    git_wrapper.commit(message)
+                    console.print("[green]Successfully squashed commits.[/green]")
+
+                    if force:
+                        git_wrapper.push('origin', branch, '--force')
+                    else:
+                        git_wrapper.push('origin', branch)
+                    console.print(f"[green]Pushed squashed changes to {branch}[/green]")
                 else:
-                    console.print("[yellow]Your local branch is up to date with the remote branch. No push needed.[/yellow]")
-                    return
-            except GitCommandError:
-                # If the remote branch doesn't exist, consider it as having differences
-                changes_made = True
+                    console.print(f"[yellow]Your local branch is {ahead} commit(s) ahead of the remote branch.[/yellow]")
+                    if force:
+                        git_wrapper.push('origin', branch, '--force')
+                    else:
+                        git_wrapper.push('origin', branch)
+                    console.print(f"[green]Pushed changes to {branch}[/green]")
+            elif behind > 0:
+                console.print(f"[yellow]Your local branch is {behind} commit(s) behind the remote branch.[/yellow]")
+                if not force:
+                    action = inquirer.select(
+                        message="How would you like to proceed?",
+                        choices=[
+                            "Pull and rebase",
+                            "Force push",
+                            "Create pull request",
+                            "Abort"
+                        ]
+                    ).execute()
+                    if action == "Pull and rebase":
+                        git_wrapper.pull('--rebase', 'origin', branch)
+                    elif action == "Force push":
+                        force = True
+                    elif action == "Create pull request":
+                        create_pr = True
+                    else:
+                        console.print("[yellow]Push aborted.[/yellow]")
+                        return
+            else:
+                console.print("[yellow]Your local branch is up to date with the remote branch. No push needed.[/yellow]")
+                return
         else:
             console.print("[yellow]No network connection. Proceeding with local push.[/yellow]")
-            changes_made = True
-
-        if changes_made or create_pr:
-            try:
-                if create_pr:
-                    if not offline:
-                        console.print(f"[yellow]Creating pull request to merge {current_branch} into {branch}.[/yellow]")
-                        result = subprocess.run(
-                            ["gh", "pr", "create", "--base", branch, "--head", current_branch,
-                             "--title", f"Merge {current_branch} into {branch}",
-                             "--body", "Automated pull request from script"],
-                            capture_output=True, text=True, check=True
-                        )
-                        console.print(f"[green]Created pull request to merge {current_branch} into {branch}[/green]")
-                    else:
-                        console.print("[yellow]No network connection. Unable to create pull request.[/yellow]")
-                else:
-                    if not offline:
-                        if force:
-                            git_wrapper.push('origin', branch, '--force')
-                        else:
-                            git_wrapper.push('origin', branch)
-                        console.print(f"[green]Pushed changes to {branch}[/green]")
-                    else:
-                        console.print("[yellow]No network connection. Changes will be pushed when online.[/yellow]")
-            except (GitCommandError, subprocess.CalledProcessError) as e:
-                console.print(f"[red]Error: {e}[/red]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")

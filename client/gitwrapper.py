@@ -398,9 +398,14 @@ class GitWrapper:
             self.console.print(f"[red]Unexpected error merging {source} into {target}: {e}[/red]")
             return False
 
-    def reset(self, mode='mixed', commit='HEAD'):
-        """Reset the current HEAD to the specified state."""
-        self.repo.git.reset(mode, commit)
+    def reset(self, mode: str, commit: str):
+        """Reset the current branch to a specific commit.
+
+        Args:
+            mode: The reset mode ('soft', 'mixed', or 'hard')
+            commit: The commit to reset to
+        """
+        self.repo.git.reset(f'--{mode}', commit)
 
     def abort_merge(self):
         """Abort the current merge process."""
@@ -507,13 +512,9 @@ class GitWrapper:
         """Get the diff between the index and the specified branch."""
         return self.repo.index.diff(branch)
 
-    def rev_parse(self, rev):
-        """Return the SHA-1 hash of the given revision."""
-        try:
-            return self.repo.git.rev_parse(rev).strip()
-        except GitCommandError as e:
-            self.console.print(f"[red]Error: {e}[/red]")
-            return None
+    def rev_parse(self, rev: str) -> str:
+        """Get the full SHA-1 hash of a revision."""
+        return self.repo.git.rev_parse(rev)
 
     def rev_list(self, *args):
         """List commit objects in reverse chronological order."""
