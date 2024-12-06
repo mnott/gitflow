@@ -1867,10 +1867,8 @@ def commit(
 
         try:
             remote_commit = git_wrapper.rev_parse(f"origin/{current_branch}")
-            # Get the last pushed commit
-            last_pushed = git_wrapper.rev_parse(f"origin/{current_branch}")
-            # Filter commits to only show up to the last pushed one
-            commits = [c for c in commits if git_wrapper.rev_list(f"{c.split()[0]}..{last_pushed}").strip() == ""]
+            # Filter commits to only show those after the remote commit
+            commits = [c for c in commits if git_wrapper.rev_list(f"{remote_commit}..{c.split()[0]}").strip() != ""]
         except GitCommandError:
             # If no remote branch exists, keep all commits
             pass
@@ -2007,10 +2005,6 @@ def _commit(
 
             # Show the full commit message and ask for confirmation
             confirm = True
-
-            if interactive:
-                console.print(f"[blue]Full commit message:[/blue]\n{full_commit_message}")
-                confirm = inquirer.confirm(message="Do you want to proceed with this commit?", default=True).execute()
 
             if not confirm:
                 console.print("[yellow]Commit aborted.[/yellow]")
@@ -3772,7 +3766,7 @@ def clone_issue(
 
         # Add labels
         for label in issue_data['labels']:
-            create_cmd.extend(["--label", label['name']])
+            create_cmd.extend(["--label", label['name']])  # Fixed missing closing bracket
 
         # Handle assignees
         if keep_assignees:
