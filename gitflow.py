@@ -1559,6 +1559,9 @@ def add(
         console.print(f"[red]Error: {e}[/red]")
 
 
+#
+# Stage changes
+#
 @app.command()
 def stage(
     all        : bool      = typer.Option  (False, "-a", "--all",         help="Stage all changes"),
@@ -1626,6 +1629,9 @@ def stage(
         console.print(f"[red]Error: {e}[/red]")
 
 
+#
+# Unstage changes
+#
 @app.command()
 def unstage(
     all:         bool      = typer.Option  (False, "-a", "--all",         help="Unstage all changes"),
@@ -1686,6 +1692,7 @@ def unstage(
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
 
 
 #
@@ -1758,6 +1765,7 @@ def stash(
 
 
 
+
 #
 # Unstash
 #
@@ -1802,11 +1810,8 @@ def unstash(
 
 
 
-
-
-
 #
-# Commit changes
+# Commit with optional squash: Combine multiple commits into one
 #
 @app.command()
 def commit(
@@ -1814,72 +1819,206 @@ def commit(
     body:        Optional[str] = typer.Option  (None,  "-b", "--body",        help="The commit message body"),
     add_all:     bool          = typer.Option  (False, "-a", "--all",         help="Add all changes before committing"),
     interactive: bool          = typer.Option  (False, "-i", "--interactive", help="Use interactive mode for commit message"),
+    squash:      bool          = typer.Option  (False, "-s", "--squash",      help="Squash all commits ahead of remote into one"),
     files:       List[str]     = typer.Argument(None,                         help="Files or directories to commit")
 ):
     """
-    Commit the current changes with a specified message and optional body.
+    Squash multiple commits into one, starting from a selected point.
 
-    Parameters:
-    - message    : The commit message.
-    - body       : The commit message body.
-    - add_all    : Add all changes before committing.
-    - interactive: Use interactive mode for commit message.
-    - files      : Files or directories to commit.
+    This command will:
+    1. If there's a remote branch, show commits ahead of remote
+    2. If no remote branch, let you select a past commit as starting point
+    3. Combine all changes since that point into a single commit
 
     Examples:
-    - Commit the current changes:
-        ./gitflow.py commit -m "Updated gitflow script"
-    - Commit with a message and body:
-        ./gitflow.py commit -m "Updated gitflow script" -b "This includes changes to improve performance and readability."
-    - Add all changes and commit:
-        ./gitflow.py commit -m "Updated gitflow script" --all
-    - Commit specific files:
-        ./gitflow.py commit -m "Updated gitflow script" README.md script.py
-    - Use interactive mode:
-        ./gitflow.py commit -i
+    - Squash commits and enter commit message:
+        ./gitflow.py squash
     """
     try:
-        # Stage changes if files are specified
-        if files:
-            git_wrapper.add(files)
-            console.print(f"[green]Added specified files to the staging area: {', '.join(files)}[/green]")
-        elif add_all:
+        if not squash:
+            _commit(message, body, add_all, interactive, False, files)
+            return
+
+        current_branch = git_wrapper.get_current_branch()
+
+        # Handle unstaged changes - auto commit for squash
+        if git_wrapper.is_dirty(untracked_files=True):
             git_wrapper.add(all=True)
-            console.print("[green]Added all changes to the staging area[/green]")
-        elif git_wrapper.is_dirty(untracked_files=True):
-            console.print("[yellow]You have unstaged changes.[/yellow]")
-            add_all = inquirer.confirm(message="Do you want to stage all changes?", default=True).execute()
-            if add_all:
+            git_wrapper.commit("WIP: Changes to be squashed")
+            console.print("[green]Auto-committed changes for squashing[/green]")
+
+        # Try to find the branch point
+        try:
+            # First try with origin/HEAD (main branch)
+            merge_base = git_wrapper.merge_base("HEAD", "origin/HEAD")
+        except GitCommandError:
+            # If that fails, try with origin/main
+            try:
+                merge_base = git_wrapper.merge_base("HEAD", "origin/main")
+            except GitCommandError:
+                # If that fails too, just get recent commits
+                merge_base = None
+
+        # Get commits since branch point or recent commits if no branch point found
+        if merge_base:
+            commits = git_wrapper.log(f"{merge_base}..HEAD", "--oneline").splitlines()
+        else:
+            commits = git_wrapper.log("HEAD", "--oneline", "-n", "10").splitlines()
+
+        try:
+            remote_commit = git_wrapper.rev_parse(f"origin/{current_branch}")
+            # Get the last pushed commit
+            last_pushed = git_wrapper.rev_parse(f"origin/{current_branch}")
+            # Filter commits to only show up to the last pushed one
+            commits = [c for c in commits if git_wrapper.rev_list(f"{c.split()[0]}..{last_pushed}").strip() == ""]
+        except GitCommandError:
+            # If no remote branch exists, keep all commits
+            pass
+
+        if not commits:
+            console.print("[yellow]No unpushed commits to squash.[/yellow]")
+            return
+
+        selected = inquirer.select(
+            message="Select the commit to squash from (all commits after this will be combined):",
+            choices=commits
+        ).execute()
+
+        # Get the parent of the selected commit
+        selected_hash = selected.split()[0]
+        base_commit = f"{selected_hash}^"  # Parent of selected commit
+
+        # Show commits that will be squashed
+        commits_to_squash = git_wrapper.log(f"{base_commit}..HEAD", "--oneline").splitlines()
+        console.print("[blue]Commits to be squashed:[/blue]")
+        for commit_msg in commits_to_squash:
+            console.print(commit_msg)
+
+        if not inquirer.confirm(message="Do you want to squash these commits?", default=True).execute():
+            return
+
+        # Perform the squash
+        git_wrapper.reset('--soft', base_commit)
+        git_wrapper.add(all=True)  # Auto-stage everything after squash
+        console.print("[green]Successfully squashed commits[/green]")
+
+        # Call internal commit function with interactive=True for squash
+        _commit(message, body, True, True, False, files)  # Force interactive for squash
+
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+
+
+#
+# Commit changes. Made internal to handle squash option.
+#
+def _commit(
+    message:     Optional[str] = None,
+    body:        Optional[str] = None,
+    add_all:     bool         = False,
+    interactive: bool         = False,
+    squash:      bool         = False,
+    files:       List[str]    = None
+):
+    """Internal commit function that handles the actual commit logic."""
+    try:
+        current_branch = git_wrapper.get_current_branch()
+
+        if squash:
+            try:
+                # First handle any unstaged changes
+                if git_wrapper.is_dirty(untracked_files=True):
+                    if add_all or inquirer.confirm(message="Do you want to stage all changes?", default=True).execute():
+                        git_wrapper.add(all=True)
+                        console.print("[green]Added all changes to the staging area[/green]")
+
+                # Determine base commit based on whether we have a merge base with main or develop
+                base_commit = None
+                try:
+                    base_commit = git_wrapper.merge_base("HEAD", "main")
+                except GitCommandError:
+                    try:
+                        base_commit = git_wrapper.merge_base("HEAD", "develop")
+                    except GitCommandError:
+                        # If no merge base found, use first commit of branch
+                        base_commit = git_wrapper.rev_list("--max-parents=0", "HEAD").strip()
+
+                # Get the complete diff from base to current
+                if not git_wrapper.get_index_diff("HEAD") and not git_wrapper.get_untracked_files():
+                    console.print("[yellow]No changes to commit.[/yellow]")
+                    return
+
+                # Generate or use provided commit message
+                if not message:
+                    console.print("[blue]Analyzing all changes for commit message...[/blue]")
+                    # Get all commits between base and HEAD to analyze
+                    commits = git_wrapper.log(f"{base_commit}..HEAD", "--pretty=format:%H").splitlines()
+                    if commits:
+                        # Pass just the commit range to explain
+                        full_commit_message = explain(None, None, base_commit, "HEAD", None, False, False, False, None, False, False)
+                    else:
+                        # If no commits, analyze the current changes
+                        full_commit_message = explain(None, None, None, None, None, False, False, False, None, False, False)
+                else:
+                    full_commit_message = get_manual_commit_message(message, body)
+
+                if not full_commit_message or not full_commit_message.strip():
+                    console.print("[red]Error: Empty commit message[/red]")
+                    return
+
+                # Perform the squash
+                git_wrapper.reset('--soft', base_commit)
+                git_wrapper.commit(full_commit_message)
+                console.print(f"[green]Successfully squashed all changes into one commit:[/green]\n{full_commit_message}")
+
+            except GitCommandError as e:
+                console.print(f"[red]Error: {e}[/red]")
+                return
+
+        else:
+            # Original commit logic
+            if files:
+                git_wrapper.add(files)
+                console.print(f"[green]Added specified files to the staging area: {', '.join(files)}[/green]")
+            elif add_all:
                 git_wrapper.add(all=True)
                 console.print("[green]Added all changes to the staging area[/green]")
+            elif git_wrapper.is_dirty(untracked_files=True):
+                console.print("[yellow]You have unstaged changes.[/yellow]")
+                add_all = inquirer.confirm(message="Do you want to stage all changes?", default=True).execute()
+                if add_all:
+                    git_wrapper.add(all=True)
+                    console.print("[green]Added all changes to the staging area[/green]")
+                else:
+                    console.print("[yellow]Proceeding with only staged changes.[/yellow]")
+
+            # Ensure there are changes to commit
+            if not git_wrapper.get_index_diff("HEAD") and not git_wrapper.get_untracked_files():
+                console.print("[yellow]No changes to commit.[/yellow]")
+                return
+
+            api_key = git_wrapper.get_git_metadata("openai.apikey")
+            if api_key and (interactive or not message):
+                full_commit_message = get_commit_message(message, body)
             else:
-                console.print("[yellow]Proceeding with only staged changes.[/yellow]")
+                full_commit_message = get_manual_commit_message(message, body)
 
-        # Ensure there are changes to commit
-        if not git_wrapper.get_index_diff("HEAD") and not git_wrapper.get_untracked_files():
-            console.print("[yellow]No changes to commit.[/yellow]")
-            return
+            # Show the full commit message and ask for confirmation
+            confirm = True
 
-        api_key = git_wrapper.get_git_metadata("openai.apikey")
-        if api_key and (interactive or not message):
-            full_commit_message = get_commit_message(message, body)
-        else:
-            full_commit_message = get_manual_commit_message(message, body)
+            if interactive:
+                console.print(f"[blue]Full commit message:[/blue]\n{full_commit_message}")
+                confirm = inquirer.confirm(message="Do you want to proceed with this commit?", default=True).execute()
 
-        # Show the full commit message and ask for confirmation
-        confirm = True
+            if not confirm:
+                console.print("[yellow]Commit aborted.[/yellow]")
+                return
 
-        if interactive:
-            console.print(f"[blue]Full commit message:[/blue]\n{full_commit_message}")
-            confirm = inquirer.confirm(message="Do you want to proceed with this commit?", default=True).execute()
-
-        if not confirm:
-            console.print("[yellow]Commit aborted.[/yellow]")
-            return
-
-        # Perform the commit
-        git_wrapper.commit(full_commit_message)
-        console.print(f"[green]Committed changes with message:[/green]\n{full_commit_message}")
+            # Perform the commit
+            git_wrapper.commit(full_commit_message)
+            console.print(f"[green]Committed changes with message.")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -3032,6 +3171,7 @@ def pull(
 
 
 
+
 #
 # Status
 #
@@ -3501,7 +3641,6 @@ def list_issues(
             elif sort_by == "number" or sort_by == "id":
                 issues.sort(key=lambda x: x.get('ID', ''), reverse=(order == "desc"))
 
-
         # Limit the number of issues
         issues = issues[:limit]
 
@@ -3558,7 +3697,6 @@ def list_issues(
         console = Console()
         console.print(f"[red]Error: {str(e)}[/red]")
         console.print(f"[red]Error type: {type(e).__name__}[/red]")
-
 
 @app.command()
 def clone_issue(
