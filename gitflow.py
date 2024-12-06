@@ -711,6 +711,11 @@ def start(
     if offline:
         console.print("[yellow]Network is unavailable. Operating in offline mode.[/yellow]")
 
+    # Auto-stash if needed
+    has_changes = git_wrapper.is_dirty()
+    if has_changes:
+        git_wrapper.stash('save')
+
     version_tag = None
     existing_tags = git_wrapper.get_tags()
 
@@ -771,6 +776,10 @@ def start(
 
         if offline:
             console.print("[yellow]Note: Branch created locally. Remember to push changes when back online.[/yellow]")
+
+        # Restore changes if we stashed them
+        if has_changes:
+            git_wrapper.stash('pop')
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
