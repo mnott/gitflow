@@ -1695,6 +1695,7 @@ def unstage(
 
 
 
+
 #
 # Stash changes
 #
@@ -2069,9 +2070,7 @@ def get_manual_commit_message(message, body):
     # Show the message that will be used
     console.print(f"[blue]Commit message:[/blue]\n{full_commit_message}")
 
-    if not inquirer.confirm(message="Do you want to use this commit message?", default=True).execute():
-        return get_manual_commit_message(None, None)  # Start over if they don't want to use this message
-
+    # Remove the confirmation here since it's handled in the calling function
     return full_commit_message
 
 
