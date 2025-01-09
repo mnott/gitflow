@@ -965,111 +965,63 @@ def cds_update(
     local:   str           = typer.Option("cds-views", "-l", "--local",   help="Local path where cds-views content will be synced"),
     message: Optional[str] = typer.Option(None,        "-m", "--message", help="Specify a commit message"),
     body:    Optional[str] = typer.Option(None,        "-b", "--body",    help="Specify a commit message body"),
+    create_pr: bool        = typer.Option(False,       "-p", "--pr",      help="Create pull requests instead of pushing directly")
 ):
     """
-    Sync changes from the remote tenantcleanup-cds repository to a specified local path, then create pull requests for main and develop branches.
-
-    This command will:
-    1. Clone or update the remote tenantcleanup-cds repository
-    2. Switch to a branch named after the local path in the current repository
-    3. Copy contents from the remote repository to the specified local directory
-    4. Commit and push the changes
-    5. Create pull requests to merge changes into main and develop branches
-
-    Parameters:
-    - remote : The URL of the remote tenantcleanup-cds repository (default: https://github.wdf.sap.corp/I052341/tenantcleanup-cds)
-    - local  : The local path where cds-views content will be synced (default: cds-views)
-    - message: An optional commit message for the sync commit
-    - body   : An optional commit message body for the sync commit
-
-    Example:
-    ./gitflow.py cds_update --remote https://github.wdf.sap.corp/I052341/tenantcleanup-cds --local cds-views -m "Sync CDS views" -b "Update views from tenantcleanup-cds"
+    Sync changes from the remote tenantcleanup-cds repository to the cds-views directory.
     """
     try:
-        # Remember the current branch
-        original_branch = git_wrapper.get_current_branch()
+        # Step 1: Manual clone process
+        subprocess.run(['rm', '-rf', local], check=True)
+        subprocess.run(['git', 'clone', remote, local], check=True)
+        subprocess.run(['rm', '-rf', os.path.join(local, '.git')], check=True)
+        subprocess.run(['git', 'add', local], check=True)
 
-        # Determine the branch name from the local path
-        branch_name = local.replace("/", "-")
-
-        # Step 1: Clone or update remote tenantcleanup-cds repository
-        temp_repo_path = os.path.join(git_wrapper.get_working_tree_dir(), "temp-tenantcleanup-cds")
-        if os.path.exists(temp_repo_path):
-            temp_repo = Repo(temp_repo_path)
-            temp_repo.remotes.origin.pull()
-            console.print("[green]Updated remote tenantcleanup-cds repository[/green]")
-        else:
-            Repo.clone_from(remote, temp_repo_path)
-            console.print("[green]Cloned remote tenantcleanup-cds repository[/green]")
-
-        # Step 2: Switch to the specified branch
-        if branch_name in git_wrapper.get_branches():
-            git_wrapper.checkout(branch_name)
-        else:
-            git_wrapper.checkout(branch_name, create=True)
-        console.print(f"[green]Switched to {branch_name} branch[/green]")
-
-        # Step 3: Copy contents
-        local_path = os.path.join(git_wrapper.get_working_tree_dir(), local)
-        if os.path.exists(local_path):
-            shutil.rmtree(local_path)
-        shutil.copytree(temp_repo_path, local_path)
-        console.print(f"[green]Copied contents from remote repository to /{local}[/green]")
-
-        # Step 4: Commit and push changes
-        git_wrapper.add(local_path)
-        if git_wrapper.is_dirty():
-            # Get the commit message
-            full_commit_message = get_commit_message(message or f"Sync changes from remote tenantcleanup-cds to {local}", body)
-
-            git_wrapper.commit(full_commit_message)
-            console.print("[green]Changes committed.[/green]")
-
-            git_wrapper.push("origin", branch_name)
-            console.print(f"[green]Pushed changes to {branch_name} branch[/green]")
-        else:
+        # Step 2: Check for changes and commit
+        status = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True, check=True).stdout
+        if not status.strip():
             console.print("[yellow]No changes to commit.[/yellow]")
+            return
 
-        # Step 5: Create pull requests for main and develop branches
-        def create_cds_pr(base_branch: str):
-            try:
-                result = subprocess.run(
-                    ["gh", "pr", "create", "--base", base_branch, "--head", branch_name,
-                     "--title", f"Merge CDS view updates into {base_branch}",
-                     "--body", full_commit_message if 'full_commit_message' in locals() else f"Syncing CDS views from {remote} to {local}"],
-                    capture_output=True, text=True, check=True
-                )
-                console.print(f"[green]Created pull request to merge {branch_name} into {base_branch}[/green]")
-                return True
-            except subprocess.CalledProcessError as e:
-                if "A pull request for branch" in e.stderr:
-                    console.print(f"[yellow]A pull request already exists for {branch_name} into {base_branch}[/yellow]")
-                    return True
-                elif "No commits between" in e.stderr:
-                    console.print(f"[yellow]No commits between {branch_name} and {base_branch}. No pull request created.[/yellow]")
-                    return False
-                else:
-                    console.print(f"[red]Error creating pull request: {e.stderr}[/red]")
-                    return False
+        # Get the commit message
+        full_commit_message = get_commit_message(message or f"Sync changes from remote tenantcleanup-cds to {local}", body)
+        git_wrapper.commit(full_commit_message)
+        console.print("[green]Changes committed.[/green]")
 
-        prs_created_develop = create_cds_pr("develop")
-        prs_created_main = create_cds_pr("main")
+        # Step 3: Push or create PRs for main and develop
+        current_branch = git_wrapper.get_current_branch()
+        for target_branch in ["develop", "main"]:
+            if create_pr:
+                try:
+                    result = subprocess.run(
+                        ["gh", "pr", "create", "--base", target_branch, "--head", current_branch,
+                         "--title", f"Merge CDS view updates into {target_branch}",
+                         "--body", full_commit_message],
+                        capture_output=True, text=True, check=True
+                    )
+                    console.print(f"[green]Created pull request to merge changes into {target_branch}[/green]")
+                except subprocess.CalledProcessError as e:
+                    if "A pull request for branch" in e.stderr:
+                        console.print(f"[yellow]A pull request already exists for {current_branch} into {target_branch}[/yellow]")
+                    elif "No commits between" in e.stderr:
+                        console.print(f"[yellow]No commits between {current_branch} and {target_branch}. No pull request created.[/yellow]")
+                    else:
+                        console.print(f"[red]Error creating pull request: {e.stderr}[/red]")
+            else:
+                try:
+                    git_wrapper.checkout(target_branch)
+                    git_wrapper.pull('origin', target_branch)
+                    git_wrapper.merge(current_branch)
+                    git_wrapper.push('origin', target_branch)
+                    console.print(f"[green]Successfully merged and pushed changes to {target_branch}[/green]")
+                except GitCommandError as e:
+                    console.print(f"[red]Error pushing to {target_branch}: {e}[/red]")
 
-        if prs_created_develop or prs_created_main:
-            console.print(f"[yellow]Pull requests created to merge {branch_name} into main and/or develop.[/yellow]")
-        else:
-            console.print(f"[yellow]No pull requests were created as there were no differences to merge.[/yellow]")
+            # Return to original branch
+            git_wrapper.checkout(current_branch)
 
-        # Return to the original branch
-        git_wrapper.checkout(original_branch)
-        console.print(f"[green]Returned to branch {original_branch}[/green]")
-
-    except GitCommandError as e:
+    except (subprocess.CalledProcessError, GitCommandError) as e:
         console.print(f"[red]Error: {e}[/red]")
-    finally:
-        # Clean up: remove the temporary cloned repository
-        if os.path.exists(temp_repo_path):
-            shutil.rmtree(temp_repo_path)
 
 
 
