@@ -1258,9 +1258,7 @@ def rm(
     force: bool = typer.Option(False, "-f", "--force", help="Force delete the branch, even if it's not fully merged or has open pull requests"),
     all: bool = typer.Option(False, "-a", "--all", help="Delete both local and remote branches with the same name")
 ):
-    """
-    Delete one or more branches using an interactive menu or by specifying the branch names.
-    """
+    """Delete one or more branches using an interactive menu or by specifying the branch names."""
     if not git_wrapper.check_network_connection():
         console.print("[yellow]Warning: No network connection. Only local operations will be performed.[/yellow]")
         all = False  # Disable remote operations
@@ -1275,14 +1273,29 @@ def rm(
     if git_wrapper.check_network_connection():
         remote_branches = [ref.name.replace('origin/', '') for ref in git_wrapper.get_origin_refs()
                            if ref.name != 'origin/HEAD' and ref.name.replace('origin/', '') not in ['develop', 'main']]
+
     if not branch_names:
-        all_branches = [f"Local: {branch}" for branch in local_branches]
-        if git_wrapper.check_network_connection():
-            all_branches += [f"Remote: {branch}" for branch in remote_branches]
+        # Create the list of choices
+        all_branches = []
+        seen_branches = set()
+
+        # If -a flag is used, add both local and remote for each branch
+        if all:
+            all_branch_names = set(local_branches + remote_branches)
+            for branch in all_branch_names:
+                if branch in local_branches:
+                    all_branches.append(f"Local: {branch}")
+                if branch in remote_branches:
+                    all_branches.append(f"Remote: {branch}")
+        else:
+            # Original behavior without -a flag
+            all_branches.extend(f"Local: {branch}" for branch in local_branches)
+            if git_wrapper.check_network_connection():
+                all_branches.extend(f"Remote: {branch}" for branch in remote_branches)
 
         selected_branches = inquirer.checkbox(
             message="Select branch(es) to delete:",
-            choices=all_branches
+            choices=sorted(all_branches)
         ).execute()
 
         if not selected_branches:
@@ -1291,29 +1304,29 @@ def rm(
     else:
         selected_branches = branch_names
 
+    # Process selected branches
+    processed_branches = set()  # Keep track of processed branches
     for branch in selected_branches:
         if "Local: " in branch:
             branch_name = branch.replace("Local: ", "")
-            delete_local = True
-            delete_remote = False
         elif "Remote: " in branch:
             branch_name = branch.replace("Remote: ", "")
-            delete_local = False
-            delete_remote = True
         else:
             branch_name = branch
-            delete_local = True
-            delete_remote = all and git_wrapper.check_network_connection()
 
-        if branch_name in ['develop', 'main']:
-            console.print(f"[red]Error: You cannot delete the {branch_name} branch. Skipping.[/red]")
+        # Skip if we've already processed this branch
+        if branch_name in processed_branches:
             continue
+        processed_branches.add(branch_name)
 
-        if delete_remote and check_prs(branch_name) and not force:
-            console.print(f"[yellow]There are open pull requests for the branch {branch_name}. Use -f to force delete the remote branch. Skipping.[/yellow]")
-            continue
-
-        git_wrapper.delete_branch(branch_name, delete_remote=delete_remote)
+        # When using -a, always try to delete both local and remote
+        if all:
+            git_wrapper.delete_branch(branch_name, delete_remote=True, delete_local=True)
+        else:
+            # Otherwise, only delete what was selected
+            delete_local = any(f"Local: {branch_name}" in b for b in selected_branches)
+            delete_remote = any(f"Remote: {branch_name}" in b for b in selected_branches)
+            git_wrapper.delete_branch(branch_name, delete_remote=delete_remote, delete_local=delete_local)
 
     # Switch to develop branch if current branch was deleted
     if git_wrapper.get_current_branch() not in local_branches + ['develop', 'main']:
