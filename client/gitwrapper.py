@@ -133,18 +133,35 @@ class GitWrapper:
         """Rename an existing branch."""
         self.repo.git.branch('-m', old_name, new_name)
 
-    def delete_branch(self, branch, delete_remote=True):
-        """Delete a branch locally and optionally on the remote."""
+    def delete_branch(self, branch, delete_remote=True, delete_local=True):
+        """Delete a branch locally and/or remotely.
+
+        Args:
+            branch (str): Name of the branch to delete
+            delete_remote (bool): Whether to delete the remote branch
+            delete_local (bool): Whether to delete the local branch
+        """
         try:
-            current_branch = self.repo.active_branch.name
-            if current_branch == branch:
-                self.repo.git.checkout('develop')
+            # Check what actually exists before announcing actions
+            local_exists = branch in [b.name for b in self.repo.branches]
+            remote_exists = False
+            if self.check_network_connection():
+                try:
+                    self.repo.git.ls_remote('--exit-code', 'origin', f'refs/heads/{branch}')
+                    remote_exists = True
+                except GitCommandError:
+                    pass
 
-            # Check if local branch exists before trying to delete it
-            if branch in [b.name for b in self.repo.branches]:
-                self.repo.git.branch('-D', branch)
-                self.console.print(f"[green]Deleted local branch {branch}[/green]")
+            # Print what we're actually going to do
+            actions = []
+            if delete_remote and remote_exists:
+                actions.append("remote")
+            if delete_local and local_exists:
+                actions.append("local")
+            if actions:
+                self.console.print(f"[blue]Deleting {' and '.join(actions)} branch{'es' if len(actions) > 1 else ''} '{branch}'...[/blue]")
 
+            # Handle remote deletion
             if delete_remote and self.check_network_connection():
                 try:
                     self.repo.git.push('origin', '--delete', branch)
@@ -154,6 +171,17 @@ class GitWrapper:
                         pass
                     else:
                         raise
+
+            # Handle local deletion
+            if delete_local and local_exists:
+                # Only switch to develop if we're deleting the current branch locally
+                current_branch = self.repo.active_branch.name
+                if current_branch == branch:
+                    self.repo.git.checkout('develop')
+
+                self.repo.git.branch('-D', branch)
+                self.console.print(f"[green]Deleted local branch {branch}[/green]")
+
         except GitCommandError as e:
             self.console.print(f"[yellow]Could not delete branch {branch}: {e}[/yellow]")
 
