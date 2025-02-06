@@ -1060,7 +1060,7 @@ def finish(
 
 @app.command()
 def sync(
-    push: bool = typer.Option(True, help="Push changes to remote after syncing"),
+    push_changes: bool = typer.Option(True, "--push/--no-push", help="Push changes to remote after syncing"),
     message: Optional[str] = typer.Option(None, "-m", "--message", help="Commit message for the merge commit"),
     body: Optional[str] = typer.Option(None, "-b", "--body", help="Commit message body"),
     force: bool = typer.Option(False, "-f", "--force", help="Force push changes")
@@ -1086,9 +1086,8 @@ def sync(
             git_wrapper.checkout('develop')
 
         # Push develop if requested
-        if push:
-            git_wrapper.push('origin', 'develop', force=force)
-            console.print("[green]Pushed changes to develop[/green]")
+        if push_changes:
+            push(branch='develop', force=force, message=message, body=body)
 
         # Then merge develop into main
         git_wrapper.checkout('main')
@@ -1099,9 +1098,8 @@ def sync(
         console.print("[green]Merged develop into main[/green]")
 
         # Push main if requested
-        if push:
-            git_wrapper.push('origin', 'main', force=force)
-            console.print("[green]Pushed changes to main[/green]")
+        if push_changes:
+            push(branch='main', force=force, message=message, body=body)
 
         # Return to original branch unless we're already there
         if original_branch != git_wrapper.get_current_branch():
@@ -1116,6 +1114,7 @@ def sync(
         return 1
 
     return 0
+
 
 def get_worktree_path(branch_name):
     """Helper function to get worktree path for a branch."""
