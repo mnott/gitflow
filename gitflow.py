@@ -951,12 +951,9 @@ def finish(
 ):
     """Finish a feature, hotfix, or release branch by merging it into develop and optionally main."""
     try:
-        # Store original branch
-        original_branch = git_wrapper.get_current_branch()
-
         # Get the current branch if none specified
         if branch is None:
-            branch = original_branch
+            branch = git_wrapper.get_current_branch()
 
         # Validate branch type
         if not any(branch.startswith(prefix) for prefix in ['feature/', 'hotfix/', 'release/']):
@@ -1031,25 +1028,15 @@ def finish(
 
             # Delete the local branch if it's not develop/main
             if branch not in ['develop', 'main']:
-                try:
-                    git_wrapper.delete_branch(branch)
-                    console.print(f"[green]Deleted local branch {branch}[/green]")
-                except GitCommandError as e:
-                    console.print(f"[yellow]Warning: Could not delete local branch: {e}[/yellow]")
+                console.print(f"Deleting local branch '{branch}'...")
+                git_wrapper.delete_branch(branch)
+                console.print(f"[green]Deleted local branch {branch}[/green]")
 
             # If we were in a worktree that was removed
             if is_worktree and os.path.realpath(worktree_path) != main_repo and os.path.realpath(worktree_path) == os.path.realpath(os.getcwd()):
                 console.print("\n[yellow]Note: Current directory no longer exists.[/yellow]")
                 console.print(f"[yellow]Please run: cd {main_repo}[/yellow]")
                 os.chdir(main_repo)
-
-        # Return to original branch if it still exists and wasn't the one we just deleted
-        # and we're not already on it
-        if (original_branch != branch and
-            original_branch in git_wrapper.get_branches() and
-            original_branch != git_wrapper.get_current_branch()):
-            git_wrapper.checkout(original_branch)
-            console.print(f"[green]Returned to {original_branch}[/green]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
