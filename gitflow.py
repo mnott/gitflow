@@ -511,6 +511,41 @@ cdworktree feature/test
 
 When we are finished, we can finish the branch right
 from here, or we can push the branch to the remote.
+
+One way to finish the branch is to run:
+
+```bash
+./gitflow.py worktree finish
+```
+
+You will then typically get this message:
+
+```
+Pushed changes to feature/test
+Removed worktree at ..../test
+
+Note: Current directory no longer exists.
+Please run:
+1. cd ..../test
+2. gf checkout feature/test
+3. gf finish
+```
+
+That means we need to go back to the main repository and
+checkout the branch again:
+
+```bash
+cd ..../test
+./gitflow.py checkout feature/test
+```
+
+Then we can finish the branch:
+
+```bash
+./gitflow.py finish
+```
+
+
 We could at some point also just decide to remove the
 worktree:
 
@@ -4328,6 +4363,59 @@ def worktree_prune():
             console.print(result)
     except GitCommandError as e:
         console.print(f"[red]Error pruning worktrees: {e}[/red]")
+
+@worktree_app.command(name="finish")
+def worktree_finish(
+    delete: bool = typer.Option(True, "-d", "--delete", help="Delete the branch and worktree after finishing"),
+    keep_local: bool = typer.Option(False, "-k", "--keep-local", help="Keep the local branch after finishing")
+):
+    """
+    Finish a feature/hotfix/release branch that is in a worktree.
+    This will:
+    1. Push any pending changes
+    2. Remove the worktree
+    3. Notify you to finish the branch from the main repository
+    """
+    try:
+        # Get current branch and verify we're in a worktree
+        current_branch = git_wrapper.get_current_branch()
+        is_worktree, worktree_path = git_wrapper.is_worktree(current_branch)
+
+        if not is_worktree:
+            console.print("[red]Error: This command should be run from a worktree, not the main repository[/red]")
+            console.print("[yellow]Use 'gf finish' in the main repository instead[/yellow]")
+            return 1
+
+        # Get main repository path
+        main_repo = os.path.realpath(git_wrapper.repo.working_dir)
+        current_dir = os.path.realpath(os.getcwd())
+
+        # Double check we're actually in the worktree directory
+        if current_dir != os.path.realpath(worktree_path):
+            console.print(f"[red]Error: Must run this command from the worktree at {worktree_path}[/red]")
+            return 1
+
+        # Verify this is a feature/hotfix/release branch
+        if not any(current_branch.startswith(prefix) for prefix in ['feature/', 'hotfix/', 'release/']):
+            console.print(f"[red]Error: Current branch '{current_branch}' is not a feature, hotfix, or release branch[/red]")
+            return 1
+
+        # Push any pending changes
+        if not git_wrapper.push_to_remote(current_branch):
+            console.print("[yellow]No changes to push[/yellow]")
+
+        # Remove the worktree
+        git_wrapper.remove_worktree(worktree_path, force=True)
+        console.print(f"[green]Removed worktree at {worktree_path}[/green]")
+        console.print("\n[yellow]Note: Current directory no longer exists.[/yellow]")
+        console.print(f"[yellow]Please run:[/yellow]")
+        console.print(f"[yellow]1. cd {main_repo}[/yellow]")
+        console.print(f"[yellow]2. gf checkout {current_branch}[/yellow]")
+        console.print(f"[yellow]3. gf finish[/yellow]")
+
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        return 1
 
 
 #
