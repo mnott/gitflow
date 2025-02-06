@@ -961,7 +961,83 @@ def finish(
             console.print("[yellow]Main and develop branches cannot be finished[/yellow]")
             return 1
 
-        # Rest of the finish command...
+        # Get main repo path
+        main_repo = os.path.realpath(git_wrapper.repo.working_dir)
+
+        # Check if we're in the right worktree
+        is_worktree, worktree_path = git_wrapper.is_worktree(branch)
+        if is_worktree and os.path.realpath(worktree_path) != os.path.realpath(os.getcwd()):
+            console.print(f"[yellow]Branch '{branch}' is used in worktree at {worktree_path}[/yellow]")
+            console.print("[yellow]To finish this branch, cd to the worktree directory first.[/yellow]")
+            return 1
+
+        if push:
+            console.print("Fetching changes from remote origin...")
+            git_wrapper.fetch('origin')
+            console.print("Fetched changes from remote origin.")
+
+            # Push the branch first
+            git_wrapper.push('origin', branch)
+            console.print(f"Pushed changes to {branch}")
+
+        # Merge into develop first
+        git_wrapper.checkout('develop')
+        git_wrapper.merge(branch, no_ff=True)
+        console.print(f"[green]Merged {branch} into develop[/green]")
+
+        # If it's a release or hotfix, merge into main too
+        if branch.startswith(('release/', 'hotfix/')):
+            git_wrapper.checkout('main')
+            git_wrapper.merge(branch, no_ff=True)
+            console.print(f"[green]Merged {branch} into main[/green]")
+
+            # Push changes to both branches
+            if push:
+                git_wrapper.push('origin', 'develop')
+                git_wrapper.push('origin', 'main')
+                console.print("[green]Pushed changes to develop and main[/green]")
+
+                # Delete remote branch
+                try:
+                    git_wrapper.push('origin', '--delete', branch)
+                    console.print(f"[green]Deleted remote branch {branch}[/green]")
+                except GitCommandError as e:
+                    console.print(f"[yellow]Warning: Could not delete remote branch: {e}[/yellow]")
+
+        elif push:
+            # For feature branches, just push develop
+            git_wrapper.push('origin', 'develop')
+            console.print("[green]Pushed changes to develop[/green]")
+
+            # Delete remote branch
+            try:
+                git_wrapper.push('origin', '--delete', branch)
+                console.print(f"[green]Deleted remote branch {branch}[/green]")
+            except GitCommandError as e:
+                console.print(f"[yellow]Warning: Could not delete remote branch: {e}[/yellow]")
+
+        # Delete the branch if requested
+        if delete:
+            # First remove the worktree if it exists
+            if is_worktree:
+                try:
+                    git_wrapper.remove_worktree(worktree_path, force=True)
+                    console.print(f"[green]Removed worktree at {worktree_path}[/green]")
+                except GitCommandError as e:
+                    console.print(f"[yellow]Warning: Could not remove worktree: {e}[/yellow]")
+
+            # Delete the local branch
+            try:
+                git_wrapper.delete_branch(branch)
+                console.print(f"[green]Deleted local branch {branch}[/green]")
+            except GitCommandError as e:
+                console.print(f"[yellow]Warning: Could not delete local branch: {e}[/yellow]")
+
+            # If we were in the worktree that was removed
+            if is_worktree and os.path.realpath(worktree_path) == os.path.realpath(os.getcwd()):
+                console.print("\n[yellow]Note: Current directory no longer exists.[/yellow]")
+                console.print(f"[yellow]Please run: cd {main_repo}[/yellow]")
+                os.chdir(main_repo)
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
