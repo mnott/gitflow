@@ -945,15 +945,91 @@ def start(
 #
 @app.command()
 def finish(
+    delete: bool = typer.Option(True, "-d", "--delete", help="Delete the branch after finishing"),
+    keep_local: bool = typer.Option(False, "-k", "--keep-local", help="Keep the local branch after finishing")
+):
+    """
+    Finish the current feature, hotfix, or release branch by creating pull requests for main and/or develop.
+    Must be run from the branch that is being finished.
+    """
+    try:
+        current_branch = git_wrapper.get_current_branch()
+
+        if current_branch in ['main', 'develop']:
+            console.print("[red]Error: Cannot finish main or develop branches[/red]")
+            return
+
+        # Determine branch type from the current branch name
+        if current_branch.startswith('feature/'):
+            branch_type = 'feature'
+        elif current_branch.startswith('hotfix/'):
+            branch_type = 'hotfix'
+        elif current_branch.startswith('release/'):
+            branch_type = 'release'
+        else:
+            console.print(f"[red]Error: Current branch '{current_branch}' is not a feature, hotfix, or release branch[/red]")
+            return
+
+        if not handle_unstaged_changes(branch_type):
+            return
+
+        offline = not git_wrapper.check_network_connection()
+
+        if offline:
+            console.print("[yellow]Network is unavailable. Operating in offline mode.[/yellow]")
+        else:
+            fetch(remote="origin", branch=None, all_remotes=False, prune=False)
+
+        push_changes = git_wrapper.push_to_remote(current_branch)
+
+        if not push_changes:
+            console.print("[yellow]No changes to push. Finishing operation.[/yellow]")
+            return
+
+        target_branches = ["main", "develop"] if branch_type in ["hotfix", "release"] else ["develop"]
+
+        # For release branches, push the tag before merging
+        if branch_type == 'release' and not offline:
+            tag_name = current_branch.split('/')[-1]
+            try:
+                git_wrapper.push('origin', tag_name)
+                console.print(f"[green]Pushed tag {tag_name} to remote[/green]")
+            except GitCommandError as e:
+                console.print(f"[yellow]Warning: Failed to push tag {tag_name}. Error: {e}[/yellow]")
+
+        merge_successful = all(git_wrapper.merge_to_target(current_branch, target) for target in target_branches)
+
+        if merge_successful:
+            if delete and not keep_local:
+                git_wrapper.delete_branch(current_branch)  # This will delete both local and remote
+                git_wrapper.cleanup_temp_branches()  # This will only delete local temp branches
+            elif keep_local:
+                console.print(f"[yellow]Keeping local branch {current_branch} as requested.[/yellow]")
+        else:
+            console.print(f"[yellow]Branch {current_branch} not deleted due to merge issues.[/yellow]")
+
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+
+#
+# Finish a feature, hotfix, or release branch
+#
+@app.command()
+def finishremote(
     branch: Optional[str] = typer.Argument(None, help="The feature branch to finish"),
     push: bool = typer.Option(True, help="Push changes to remote after merging"),
     delete: bool = typer.Option(True, help="Delete the feature branch after merging")
 ):
     """Finish a feature, hotfix, or release branch by merging it into develop and optionally main."""
     try:
+        # Store original branch
+        original_branch = git_wrapper.get_current_branch()
+
         # Get the current branch if none specified
         if branch is None:
-            branch = git_wrapper.get_current_branch()
+            branch = original_branch
 
         # Validate branch type
         if not any(branch.startswith(prefix) for prefix in ['feature/', 'hotfix/', 'release/']):
@@ -1028,15 +1104,25 @@ def finish(
 
             # Delete the local branch if it's not develop/main
             if branch not in ['develop', 'main']:
-                console.print(f"Deleting local branch '{branch}'...")
-                git_wrapper.delete_branch(branch)
-                console.print(f"[green]Deleted local branch {branch}[/green]")
+                try:
+                    git_wrapper.delete_branch(branch)
+                    console.print(f"[green]Deleted local branch {branch}[/green]")
+                except GitCommandError as e:
+                    console.print(f"[yellow]Warning: Could not delete local branch: {e}[/yellow]")
 
             # If we were in a worktree that was removed
             if is_worktree and os.path.realpath(worktree_path) != main_repo and os.path.realpath(worktree_path) == os.path.realpath(os.getcwd()):
                 console.print("\n[yellow]Note: Current directory no longer exists.[/yellow]")
                 console.print(f"[yellow]Please run: cd {main_repo}[/yellow]")
                 os.chdir(main_repo)
+
+        # Return to original branch if it still exists and wasn't the one we just deleted
+        # and we're not already on it
+        if (original_branch != branch and
+            original_branch in git_wrapper.get_branches() and
+            original_branch != git_wrapper.get_current_branch()):
+            git_wrapper.checkout(original_branch)
+            console.print(f"[green]Returned to {original_branch}[/green]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
