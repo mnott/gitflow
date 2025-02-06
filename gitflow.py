@@ -1044,7 +1044,10 @@ def finish(
                 os.chdir(main_repo)
 
         # Return to original branch if it still exists and wasn't the one we just deleted
-        if original_branch != branch and original_branch in git_wrapper.get_branches():
+        # and we're not already on it
+        if (original_branch != branch and
+            original_branch in git_wrapper.get_branches() and
+            original_branch != git_wrapper.get_current_branch()):
             git_wrapper.checkout(original_branch)
             console.print(f"[green]Returned to {original_branch}[/green]")
 
