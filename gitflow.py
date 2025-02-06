@@ -1100,7 +1100,7 @@ def sync(
 
         # Push main if requested
         if push_changes:
-            push(remote="origin", branch='main', force=force, message=message, body=body)
+            push(remote=remote, branch='main', force=force, message=message, body=body)
 
         # Return to original branch unless we're already there
         if original_branch != git_wrapper.get_current_branch():
