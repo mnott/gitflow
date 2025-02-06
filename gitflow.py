@@ -1057,6 +1057,66 @@ def finish(
 
     return 0
 
+
+@app.command()
+def sync(
+    push: bool = typer.Option(True, help="Push changes to remote after syncing"),
+    message: Optional[str] = typer.Option(None, "-m", "--message", help="Commit message for the merge commit"),
+    body: Optional[str] = typer.Option(None, "-b", "--body", help="Commit message body"),
+    force: bool = typer.Option(False, "-f", "--force", help="Force push changes")
+):
+    """
+    Synchronize main branch with develop.
+
+    This is a shortcut for syncing main with develop without creating a release.
+    The command will merge develop into main and return you to your original branch.
+
+    Examples:
+        gf sync  # Sync main with develop and push
+        gf sync --no-push  # Sync without pushing
+        gf sync -m "Sync main with develop" # Custom merge message
+        gf sync -f  # Force push if needed
+    """
+    try:
+        # Store original branch
+        original_branch = git_wrapper.get_current_branch()
+
+        # First ensure we're on develop
+        if original_branch != 'develop':
+            git_wrapper.checkout('develop')
+
+        # Push develop if requested
+        if push:
+            git_wrapper.push('origin', 'develop', force=force)
+            console.print("[green]Pushed changes to develop[/green]")
+
+        # Then merge develop into main
+        git_wrapper.checkout('main')
+        if message:
+            git_wrapper.merge('develop', no_ff=True, message=message, body=body)
+        else:
+            git_wrapper.merge('develop', no_ff=True)
+        console.print("[green]Merged develop into main[/green]")
+
+        # Push main if requested
+        if push:
+            git_wrapper.push('origin', 'main', force=force)
+            console.print("[green]Pushed changes to main[/green]")
+
+        # Return to original branch unless we're already there
+        if original_branch != git_wrapper.get_current_branch():
+            git_wrapper.checkout(original_branch)
+            console.print(f"[green]Returned to {original_branch}[/green]")
+
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        # Try to return to original branch on error
+        if original_branch != git_wrapper.get_current_branch():
+            git_wrapper.checkout(original_branch)
+        return 1
+
+    return 0
+
 def get_worktree_path(branch_name):
     """Helper function to get worktree path for a branch."""
     is_worktree, worktree_path = git_wrapper.is_worktree(branch_name)
