@@ -951,9 +951,12 @@ def finish(
 ):
     """Finish a feature, hotfix, or release branch by merging it into develop and optionally main."""
     try:
+        # Store original branch
+        original_branch = git_wrapper.get_current_branch()
+
         # Get the current branch if none specified
         if branch is None:
-            branch = git_wrapper.get_current_branch()
+            branch = original_branch
 
         # Validate branch type
         if not any(branch.startswith(prefix) for prefix in ['feature/', 'hotfix/', 'release/']):
@@ -1039,6 +1042,11 @@ def finish(
                 console.print("\n[yellow]Note: Current directory no longer exists.[/yellow]")
                 console.print(f"[yellow]Please run: cd {main_repo}[/yellow]")
                 os.chdir(main_repo)
+
+        # Return to original branch if it still exists and wasn't the one we just deleted
+        if original_branch != branch and original_branch in git_wrapper.get_branches():
+            git_wrapper.checkout(original_branch)
+            console.print(f"[green]Returned to {original_branch}[/green]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -2892,13 +2900,16 @@ def merge(
 ):
     """Merge one local branch into another."""
     try:
+        # Store original branch
+        original_branch = git_wrapper.get_current_branch()
+
         # Use the current branch if no source is provided
         if source is None:
-            source = git_wrapper.get_current_branch()
+            source = original_branch
 
         # If no target is provided, use the current branch
         if target is None:
-            target = git_wrapper.get_current_branch()
+            target = original_branch
 
         # Check if target branch is in a worktree
         is_worktree, worktree_path = git_wrapper.is_worktree(target)
@@ -2908,18 +2919,36 @@ def merge(
             console.print("[yellow]To merge into this branch, cd to the worktree directory first.[/yellow]")
             return 1
 
-        # Switch to target branch
-        git_wrapper.checkout(target)
-
-        # Perform the merge
+        # Check if there are differences to merge
         try:
+            merge_base = git_wrapper.merge_base(source, target)
+            source_commit = git_wrapper.rev_parse(source)
+            target_commit = git_wrapper.rev_parse(target)
+
+            if merge_base == source_commit and merge_base == target_commit:
+                console.print(f"[yellow]Already up to date. No differences between {source} and {target}.[/yellow]")
+                return 0
+
+            # Only switch to target branch if there are differences
+            git_wrapper.checkout(target)
+
+            # Perform the merge
             if squash:
                 git_wrapper.merge(source, squash=True)
             else:
                 git_wrapper.merge(source, no_ff=no_ff)
             console.print(f"[green]Successfully merged {source} into {target}[/green]")
+
+            # Return to original branch unless we're already there
+            if original_branch != target:
+                git_wrapper.checkout(original_branch)
+                console.print(f"[green]Returned to {original_branch}[/green]")
+
         except GitCommandError as e:
             console.print(f"[red]Error merging: {e}[/red]")
+            # Try to return to original branch on error
+            if original_branch != git_wrapper.get_current_branch():
+                git_wrapper.checkout(original_branch)
             return 1
 
     except GitCommandError as e:
