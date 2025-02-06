@@ -2814,7 +2814,6 @@ def merge(
     no_ff: bool = typer.Option(True, "--no-ff", help="Create a merge commit even when fast-forward is possible")
 ):
     """Merge one local branch into another."""
-    original_branch = git_wrapper.get_current_branch()
     try:
         # Use the current branch if no source is provided
         if source is None:
@@ -2830,36 +2829,17 @@ def merge(
         if is_worktree and os.path.realpath(worktree_path) != current_dir:
             console.print(f"[yellow]Target branch '{target}' is used in worktree at {worktree_path}[/yellow]")
             console.print("[yellow]To merge into this branch, cd to the worktree directory first.[/yellow]")
-            return
+            return 1
 
-        # Check for unstaged changes
-        if git_wrapper.is_dirty(untracked_files=True):
-            console.print("[yellow]You have unstaged changes.[/yellow]")
-            action = inquirer.select(
-                message="How would you like to proceed?",
-                choices=[
-                    "Commit changes",
-                    "Stash changes",
-                    "Continue without committing",
-                    "Abort"
-                ]
-            ).execute()
-
-            if action == "Commit changes":
-                full_commit_message = get_commit_message()
-                git_wrapper.add('.')
-                git_wrapper.commit(full_commit_message)
-                console.print("[green]Changes committed.[/green]")
-            elif action == "Stash changes":
-                git_wrapper.stash('save', f"Stashed changes before merging {source}")
-                console.print("[green]Changes stashed.[/green]")
-            elif action == "Abort":
-                console.print("[yellow]Merge aborted.[/yellow]")
-                return
+        # Switch to target branch
+        git_wrapper.checkout(target)
 
         # Perform the merge
         try:
-            git_wrapper.merge(source, squash=squash, no_ff=no_ff)
+            if squash:
+                git_wrapper.merge(source, squash=True)
+            else:
+                git_wrapper.merge(source, no_ff=no_ff)
             console.print(f"[green]Successfully merged {source} into {target}[/green]")
         except GitCommandError as e:
             console.print(f"[red]Error merging: {e}[/red]")
