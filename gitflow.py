@@ -369,9 +369,164 @@ in handy:
 ./gitflow.py list-issues
 ```
 
+
+## Worktree Operations
+
+Git worktrees allow you to have multiple working directories connected to the same repository.
+This is useful for working on multiple branches simultaneously without constantly switching.
+
+Imagine you're working on a big feature in feature/dashboard5 and suddenly your team reports
+a critical bug in production that needs immediate attention. Without worktrees, you'd need to:
+
+1. Stash or commit your half-done dashboard work
+2. Switch to the hotfix branch
+3. Fix the bug
+4. Switch back to your feature
+5. Remember where you were with your work
+
+With worktrees, instead you can:
+
+1. Keep your dashboard work exactly as is in your worktree
+2. In your main repository, create and checkout a hotfix branch
+3. Fix the bug
+4. Submit the fix
+5. Return to your dashboard work in the worktree - everything is exactly as you left it
+
+Another common use case is when you need to run two versions of your code simultaneously -
+like comparing how your app behaves before and after your changes, or running tests on
+two different branches at once.
+
+But if you're not encountering these scenarios, and branch switching isn't causing you pain,
+then worktrees might be adding unnecessary complexity to your workflow. Git worktrees are a
+power tool - helpful in specific situations but not something everyone needs for daily work.
+
+Worktrees are best used as a temporary solution for specific situations, not as your
+default way of working. Here's a sensible approach:
+
+Do most of your daily work in your main repository directory, using normal branch switching
+Create a worktree only when you have a specific need, like:
+
+- When you need to work on an urgent fix while keeping your current work intact
+- When you need to run two versions of your code side by side
+- When you're reviewing a complex PR and want to run it alongside your current work
+
+Then, once you're done with that specific task, you can remove the worktree and go back
+to your normal workflow. Think of worktrees like a spare workbench - you don't need it
+for every task, but it's very helpful when you need to work on two things
+at once without mixing them up.
+
+### Create a Worktree
+
+To create a new worktree for an existing branch or create a new branch on the fly:
+
+```bash
+./gitflow.py worktree add feature/test ../tc-worktrees/dashboard5
+```
+
+
+### Switch Between Worktrees
+
+For this to work, it makes sense to have this in your `~/.bashrc` or `~/.zshrc`:
+
+```bash
+# Git worktree navigation
+function cdworktree() {
+    local branch="$1"
+    if [[ -z "$branch" ]]; then
+        echo "Usage: cdworktree <branch-name>"
+        return 1
+    fi
+
+    # Get all output first to avoid multiple calls
+    local all_output=$(gf ls --format plain 2>/dev/null)
+
+    # First try to find a worktree for the requested branch
+    local line=$(echo "$all_output" | grep -F "$branch" | head -n1)
+    local worktree_path=$(echo "$line" | grep -o '<[^>]*>' | sed 's/^<\(.*\)>$/\1/')
+
+    if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
+        cd "$worktree_path"
+        return
+    fi
+
+    # If no worktree found for the branch, try to find the main repository
+    # Look for the current branch's worktree
+    local current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    local main_repo=$(echo "$all_output" | grep -F "$current_branch" | grep -o '<[^>]*>' | sed 's/^<\(.*\)>$/\1/')
+
+    # Verify the branch exists
+    if git rev-parse --verify "$branch" >/dev/null 2>&1; then
+        if [[ -n "$main_repo" && -d "$main_repo" ]]; then
+            if [[ "$PWD" != "$main_repo" ]]; then
+                cd "$main_repo"
+                echo "Note: '$branch' is not in a worktree, changing to main repository at $main_repo"
+            fi
+        else
+            echo "Could not determine main repository location"
+            return 1
+        fi
+    else
+        echo "No worktree or branch found for '$branch'"
+        return 1
+    fi
+}
+```
+
+To switch to an existing worktree's directory:
+
+```bash
+cdworktree feature/test
+```
+
+### List Worktrees
+
+To list all worktrees and their locations:
+
+```bash
+./gitflow.py worktree ls
+```
+
+### Remove a Worktree
+
+To safely remove a worktree and clean up its branch:
+
+```bash
+./gitflow.py worktree rm feature/test
+```
+
+### Sample Workflow
+
+First, we create a new worktree for the feature branch (if
+the branch already exists, it will be added to that worktree):
+
+```bash
+./gitflow.py worktree add feature/test ../tc-worktrees/test
+```
+
+Then, we cd into the worktree and start working on the feature:
+
+```bash
+cdworktree feature/test
+```
+
+When we are finished, we can finish the branch right
+from here, or we can push the branch to the remote.
+We could at some point also just decide to remove the
+worktree:
+
+```bash
+./gitflow.py worktree rm feature/test
+```
+
+Note that if you finish or remove a worktree while you are
+in it, you will not be moved back to the main repository, but
+you will be shown a message to that effect.
+
+
 # License
 
 This script is released under the [WTFPL License](https://en.wikipedia.org/wiki/WTFPL).
+
 """
 
 from collections import defaultdict
@@ -790,72 +945,52 @@ def start(
 #
 @app.command()
 def finish(
-    delete: bool = typer.Option(True, "-d", "--delete", help="Delete the branch after finishing"),
-    keep_local: bool = typer.Option(False, "-k", "--keep-local", help="Keep the local branch after finishing")
+    branch: Optional[str] = typer.Argument(None, help="The feature branch to finish"),
+    push: bool = typer.Option(True, help="Push changes to remote after merging"),
+    delete: bool = typer.Option(True, help="Delete the feature branch after merging")
 ):
-    """
-    Finish the current feature, hotfix, or release branch by creating pull requests for main and/or develop.
-    Must be run from the branch that is being finished.
-    """
+    """Finish a feature, hotfix, or release branch by merging it into develop and optionally main."""
     try:
-        current_branch = git_wrapper.get_current_branch()
+        # Get the current branch if none specified
+        if branch is None:
+            branch = git_wrapper.get_current_branch()
 
-        if current_branch in ['main', 'develop']:
-            console.print("[red]Error: Cannot finish main or develop branches[/red]")
-            return
+        # Validate branch type
+        if not any(branch.startswith(prefix) for prefix in ['feature/', 'hotfix/', 'release/']):
+            console.print("[red]Error: Can only finish feature/*, hotfix/*, or release/* branches[/red]")
+            console.print("[yellow]Main and develop branches cannot be finished[/yellow]")
+            return 1
 
-        # Determine branch type from the current branch name
-        if current_branch.startswith('feature/'):
-            branch_type = 'feature'
-        elif current_branch.startswith('hotfix/'):
-            branch_type = 'hotfix'
-        elif current_branch.startswith('release/'):
-            branch_type = 'release'
-        else:
-            console.print(f"[red]Error: Current branch '{current_branch}' is not a feature, hotfix, or release branch[/red]")
-            return
-
-        if not handle_unstaged_changes(branch_type):
-            return
-
-        offline = not git_wrapper.check_network_connection()
-
-        if offline:
-            console.print("[yellow]Network is unavailable. Operating in offline mode.[/yellow]")
-        else:
-            fetch(remote="origin", branch=None, all_remotes=False, prune=False)
-
-        push_changes = git_wrapper.push_to_remote(current_branch)
-
-        if not push_changes:
-            console.print("[yellow]No changes to push. Finishing operation.[/yellow]")
-            return
-
-        target_branches = ["main", "develop"] if branch_type in ["hotfix", "release"] else ["develop"]
-
-        # For release branches, push the tag before merging
-        if branch_type == 'release' and not offline:
-            tag_name = current_branch.split('/')[-1]
-            try:
-                git_wrapper.push('origin', tag_name)
-                console.print(f"[green]Pushed tag {tag_name} to remote[/green]")
-            except GitCommandError as e:
-                console.print(f"[yellow]Warning: Failed to push tag {tag_name}. Error: {e}[/yellow]")
-
-        merge_successful = all(git_wrapper.merge_to_target(current_branch, target) for target in target_branches)
-
-        if merge_successful:
-            if delete and not keep_local:
-                git_wrapper.delete_branch(current_branch)  # This will delete both local and remote
-                git_wrapper.cleanup_temp_branches()  # This will only delete local temp branches
-            elif keep_local:
-                console.print(f"[yellow]Keeping local branch {current_branch} as requested.[/yellow]")
-        else:
-            console.print(f"[yellow]Branch {current_branch} not deleted due to merge issues.[/yellow]")
+        # Rest of the finish command...
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+        return 1
 
+    return 0
+
+def get_worktree_path(branch_name):
+    """Helper function to get worktree path for a branch."""
+    is_worktree, worktree_path = git_wrapper.is_worktree(branch_name)
+    return worktree_path if is_worktree else None
+
+
+def merge_in_worktree(source_branch, target_branch):
+    """Helper function to safely merge in a worktree."""
+    target_path = get_worktree_path(target_branch)
+    if not target_path:
+        raise GitCommandError(f"Cannot find worktree for {target_branch}")
+
+    # Change to the target branch's worktree
+    os.chdir(target_path)
+
+    # Merge the source branch
+    console.print(f"Merging {source_branch} into {target_branch}...")
+    git_wrapper.merge(source_branch, no_ff=True)
+
+    if push:
+        git_wrapper.push('origin', target_branch)
+        console.print(f"Pushed changes to {target_branch}")
 
 
 #
@@ -1102,41 +1237,94 @@ def update(
 # List all branches
 #
 @app.command()
-def ls():
+def ls(
+    format: str = typer.Option(None, "-f", "--format",
+        help="Output format: table (default), csv, tsv, plain")
+):
     """
-    List all branches, including both local and remote, with their comments if available.
+    List all branches, including both local and remote, with their comments and worktree information.
 
-    Examples:
-    - List all branches:
-        ./gitflow.py ls
+    Formats:
+    - table: Rich formatted table (default)
+    - csv: Comma-separated values
+    - tsv: Tab-separated values
+    - plain: Simple space-separated format (no network access)
     """
-    git_wrapper.fetch('--all', '--prune')
+    # Only fetch when using table format (the default interactive view)
+    if format is None:
+        git_wrapper.fetch('--all', '--prune')
+
     local_branches = git_wrapper.get_local_branches()
     remote_branches = git_wrapper.get_remote_branches()
     branch_comments = git_wrapper.get_all_branch_comments()
 
-    # Create table for local branches
-    local_table = Table(title="Local branches", box=box.ROUNDED)
-    local_table.add_column("Branch", style="cyan")
-    local_table.add_column("Comment", style="green")
+    if format in ['csv', 'tsv', 'plain']:
+        # Header
+        separator = ',' if format == 'csv' else '\t' if format == 'tsv' else ' '
+        if format in ['csv', 'tsv']:
+            # For CSV/TSV, quote fields that might contain the separator
+            def quote_field(field):
+                if separator in field:
+                    return f'"{field}"'
+                return field
 
-    for branch in local_branches:
-        comment = branch_comments.get(branch, "")
-        local_table.add_row(branch, comment)
+            print(separator.join(['branch', 'type', 'comment', 'worktree']))
 
-    # Create table for remote branches
-    remote_table = Table(title="Remote branches", box=box.ROUNDED)
-    remote_table.add_column("Branch", style="cyan")
-    remote_table.add_column("Comment", style="green")
+            # Local branches
+            for branch in local_branches:
+                comment = quote_field(branch_comments.get(branch, ""))
+                is_worktree, worktree_path = git_wrapper.is_worktree(branch)
+                worktree_info = quote_field(f"at {worktree_path}") if is_worktree else ""
+                print(separator.join([
+                    quote_field(branch),
+                    'local',
+                    comment,
+                    worktree_info
+                ]))
 
-    for branch in remote_branches:
-        branch_name = branch.replace('origin/', '')
-        comment = branch_comments.get(branch_name, "")
-        remote_table.add_row(branch, comment)
+            # Remote branches
+            for branch in remote_branches:
+                branch_name = branch.replace('origin/', '')
+                comment = quote_field(branch_comments.get(branch_name, ""))
+                print(separator.join([
+                    quote_field(branch),
+                    'remote',
+                    comment,
+                    ""
+                ]))
+        else:  # plain format
+            # For plain format, just use simple space-separated output
+            for branch in local_branches:
+                is_worktree, worktree_path = git_wrapper.is_worktree(branch)
+                worktree_info = f"<{worktree_path}>" if is_worktree else ""  # Using <> instead of []
+                print(f"{branch} {worktree_info}")
+            for branch in remote_branches:
+                print(branch)
+    else:
+        # Original table format
+        local_table = Table(title="Local branches", box=box.ROUNDED)
+        local_table.add_column("Branch", style="cyan")
+        local_table.add_column("Comment", style="green")
+        local_table.add_column("Worktree", style="yellow")
 
-    console.print(local_table)
-    console.print("\n")
-    console.print(remote_table)
+        for branch in local_branches:
+            comment = branch_comments.get(branch, "")
+            is_worktree, worktree_path = git_wrapper.is_worktree(branch)
+            worktree_info = f"at {worktree_path}" if is_worktree else ""
+            local_table.add_row(branch, comment, worktree_info)
+
+        remote_table = Table(title="Remote branches", box=box.ROUNDED)
+        remote_table.add_column("Branch", style="cyan")
+        remote_table.add_column("Comment", style="green")
+
+        for branch in remote_branches:
+            branch_name = branch.replace('origin/', '')
+            comment = branch_comments.get(branch_name, "")
+            remote_table.add_row(branch, comment)
+
+        console.print(local_table)
+        console.print("\n")
+        console.print(remote_table)
 
 
 #
@@ -1144,48 +1332,59 @@ def ls():
 #
 @app.command()
 def checkout(
-    target: Optional[str] = typer.Argument(None,                   help="The branch to switch to, or file/directory to revert"),
-    force:  bool          = typer.Option  (False, "-f", "--force", help="Force checkout, discarding local changes")
+    target: Optional[str] = typer.Argument(None, help="The branch to switch to, or file/directory to revert"),
+    force: bool = typer.Option(False, "-f", "--force", help="Force checkout, discarding local changes")
 ):
     """
     Switch to a different branch or revert changes in files/directories.
-
-    Examples:
-    - Switch to a different branch interactively:
-        ./gitflow.py checkout
-    - Switch to a specific branch:
-        ./gitflow.py checkout develop
-    - Revert changes in a file:
-        ./gitflow.py checkout -- filename.txt
-    - Revert all changes in the current directory:
-        ./gitflow.py checkout .
-    - Force checkout to a branch, discarding local changes:
-        ./gitflow.py checkout develop -f
     """
     offline = not git_wrapper.check_network_connection()
 
     try:
         if target is None:
             # Interactive branch selection
-            local_branches = [f"Local : {head.name}" for head in git_wrapper.get_heads()]
+            local_branches = []
+            for head in git_wrapper.get_heads():
+                # Check if branch is in a worktree
+                is_worktree, worktree_path = git_wrapper.is_worktree(head.name)
+                if is_worktree:
+                    local_branches.append(f"Local : {head.name} [worktree at {worktree_path}]")
+                else:
+                    local_branches.append(f"Local : {head.name}")
+
             if not offline:
-                remote_branches = [f"Remote: {ref.name.replace('origin/', '')}" for ref in git_wrapper.get_origin_refs() if ref.name != 'origin/HEAD']
+                remote_branches = [f"Remote: {ref.name.replace('origin/', '')}"
+                                 for ref in git_wrapper.get_origin_refs()
+                                 if ref.name != 'origin/HEAD']
                 branches = local_branches + remote_branches
             else:
                 branches = local_branches
                 console.print("[yellow]Offline mode: Only local branches are available.[/yellow]")
 
             selected = inquirer.select(message="Select a branch:", choices=branches).execute()
-            branch_type, branch_name = selected.split(": ")
+            branch_type, branch_info = selected.split(": ", 1)
+
+            # Extract branch name from selection (remove worktree info if present)
+            branch_name = branch_info.split(" [worktree")[0]
 
             if branch_type == "Remote":
                 target = f"origin/{branch_name}"
             else:
                 target = branch_name
 
-        # Check if target is a branch
+        # Check if target branch is in a different worktree
+        target_branch = target.replace("origin/", "")
+        is_worktree, worktree_path = git_wrapper.is_worktree(target_branch)
+        current_dir = os.path.normpath(os.getcwd())
+
+        if is_worktree and os.path.normpath(worktree_path) != current_dir:
+            console.print(f"[yellow]Branch '{target}' is used in worktree at {worktree_path}[/yellow]")
+            console.print(f"[yellow]Use 'cdworktree {target_branch}' to switch to that worktree.[/yellow]")
+            return
+
+        # Normal checkout logic
         if target in git_wrapper.get_branches() or (not offline and target.startswith("origin/")):
-            # Check if there are uncommitted changes
+            # Check for uncommitted changes
             if git_wrapper.is_dirty(untracked_files=True) and not force:
                 action = inquirer.select(
                     message="You have uncommitted changes. What would you like to do?",
@@ -1236,17 +1435,6 @@ def checkout(
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
-
-    # If changes were stashed, ask if the user wants to pop them
-    if 'action' in locals() and action == "Stash changes":
-        pop_stash = inquirer.confirm(message="Do you want to pop the stashed changes?", default=True).execute()
-        if pop_stash:
-            try:
-                git_wrapper.stash('pop')
-                console.print("[green]Stashed changes reapplied.[/green]")
-            except GitCommandError as e:
-                console.print(f"[red]Error reapplying stashed changes: {e}[/red]")
-                console.print("[yellow]Your changes are still in the stash. You may need to manually resolve conflicts.[/yellow]")
 
 
 #
@@ -2620,35 +2808,14 @@ def fetch(
 #
 @app.command()
 def merge(
-    source: Optional[str] = typer.Argument(None,              help="The source branch to merge from"),
-    target: Optional[str] = typer.Argument(None,              help="The target branch to merge into"),
-    squash: bool          = typer.Option  (False, "--squash", help="Squash commits when merging"),
-    no_ff:  bool          = typer.Option  (True,  "--no-ff",  help="Create a merge commit even when fast-forward is possible")
+    source: Optional[str] = typer.Argument(None, help="The source branch to merge from"),
+    target: Optional[str] = typer.Argument(None, help="The target branch to merge into"),
+    squash: bool = typer.Option(False, "--squash", help="Squash commits when merging"),
+    no_ff:  bool = typer.Option(True, "--no-ff", help="Create a merge commit even when fast-forward is possible")
 ):
-    """
-    Merge one local branch into another.
-
-    Parameters:
-    - source: The source branch to merge from. If not specified, the current branch will be used.
-    - target: The target branch to merge into. If not specified, will be prompted.
-    - squash: Squash commits when merging.
-    - no_ff : Create a merge commit even when fast-forward is possible (default: True).
-
-    Examples:
-    - Merge current branch into main:
-        ./gitflow.py merge main
-    - Merge feature branch into develop with squash:
-        ./gitflow.py merge feature/new-feature develop --squash
-    - Merge release branch into main with fast-forward:
-        ./gitflow.py merge release/v1.0 main --no-ff=false
-    """
+    """Merge one local branch into another."""
     original_branch = git_wrapper.get_current_branch()
     try:
-        # Check if we're in the middle of a merge
-        if git_wrapper.status('--porcelain', '--untracked-files=no') and os.path.exists(git_wrapper.get_git_dir() + '/MERGE_HEAD'):
-            console.print("[yellow]Continuing previous merge...[/yellow]")
-            return continue_merge()
-
         # Use the current branch if no source is provided
         if source is None:
             source = git_wrapper.get_current_branch()
@@ -2656,6 +2823,14 @@ def merge(
         # If no target is provided, use the current branch
         if target is None:
             target = git_wrapper.get_current_branch()
+
+        # Check if either branch is in a worktree
+        for branch in [source, target]:
+            is_worktree, worktree_path = git_wrapper.is_worktree(branch)
+            if is_worktree:
+                console.print(f"[yellow]Branch '{branch}' is used in worktree at {worktree_path}[/yellow]")
+                console.print("[yellow]To merge this branch, cd to the worktree directory first.[/yellow]")
+                return
 
         # Check for unstaged changes
         if git_wrapper.is_dirty(untracked_files=True):
@@ -2869,135 +3044,109 @@ def continue_merge():
 #
 @app.command()
 def push(
-    branch:    Optional[str] = typer.Argument(None,                   help="The branch to push changes to"),
-    force:     bool          = typer.Option  (False, "-f", "--force", help="Force push changes"),
-    create_pr: bool          = typer.Option  (False, "-p", "--pr",    help="Create a pull request instead of pushing directly")
+    remote: str = typer.Option("origin", help="Remote to push to"),
+    branch: Optional[str] = typer.Argument(None, help="Branch to push (defaults to current)"),
+    message: Optional[str] = typer.Option(None, "-m", "--message", help="Commit message before pushing"),
+    body: Optional[str] = typer.Option(None, "-b", "--body", help="Commit message body"),
+    force: bool = typer.Option(False, "-f", "--force", help="Force push")
 ):
     """
-    Push the committed changes to the remote repository. If the branch is protected, create a pull request.
+    Push changes to remote repository.
 
-    Parameters:
-    - branch   : The branch to push changes to. If not specified, the current branch will be used.
-    - force    : Force push the changes.
-    - create_pr: Create a pull request instead of pushing directly.
+    If --message is provided, changes will be committed before pushing.
+    Use --body to add a detailed message body to the commit.
 
     Examples:
-    - Push changes to the current branch:
-        ./gitflow.py push
-    - Force push changes to a specific branch:
-        ./gitflow.py push feature/new-feature -f
-    - Create a pull request instead of pushing:
-        ./gitflow.py push -p
+        gf push  # Push current branch
+        gf push feature/test  # Push specific branch
+        gf push -m "Fix bug" # Commit and push
+        gf push -m "Fix bug" -b "Detailed explanation" # Commit with body and push
     """
-
     try:
-        # Use the current branch if no branch is provided
+        # Get current branch if none specified
         if branch is None:
             branch = git_wrapper.get_current_branch()
 
-        current_branch = git_wrapper.get_current_branch()
+        # Check if branch is in a worktree
+        is_worktree, worktree_path = git_wrapper.is_worktree(branch)
+        if is_worktree and worktree_path != os.getcwd():
+            console.print(f"[yellow]Branch '{branch}' is used in worktree at {worktree_path}[/yellow]")
+            console.print("[yellow]To push this branch, cd to the worktree directory first.[/yellow]")
+            return 1
 
-        # Check for unstaged changes
-        if git_wrapper.is_dirty(untracked_files=True):
-            console.print("[yellow]You have unstaged changes.[/yellow]")
-            action = inquirer.select(
-                message="How would you like to proceed?",
-                choices=[
-                    "Commit changes",
-                    "Stash changes",
-                    "Continue without committing",
-                    "Abort"
-                ]
-            ).execute()
-
-            if action == "Commit changes":
-                full_commit_message = get_commit_message()
-                git_wrapper.add('.')
-                git_wrapper.commit(full_commit_message)
-                console.print("[green]Changes committed.[/green]")
-            elif action == "Stash changes":
-                git_wrapper.stash('save', f"Stashed changes before finishing {branch}")
-                console.print("[green]Changes stashed.[/green]")
-            elif action == "Abort":
-                console.print("[yellow]Push aborted.[/yellow]")
-                return
-
+        # Check for network connection
         offline = not git_wrapper.check_network_connection()
+        if offline:
+            console.print("[yellow]No network connection. Changes will be pushed when online.[/yellow]")
+
+        # Handle uncommitted changes
+        if git_wrapper.is_dirty(untracked_files=True):
+            if message:
+                # Commit changes with provided message
+                full_message = get_commit_message(message, body)
+                git_wrapper.add('.')
+                git_wrapper.commit(full_message)
+                console.print("[green]Changes committed.[/green]")
+            else:
+                console.print("[yellow]You have unstaged changes.[/yellow]")
+                action = inquirer.select(
+                    message="How would you like to proceed?",
+                    choices=[
+                        "Commit changes",
+                        "Continue without committing",
+                        "Abort"
+                    ]
+                ).execute()
+
+                if action == "Commit changes":
+                    full_message = get_commit_message()
+                    git_wrapper.add('.')
+                    git_wrapper.commit(full_message)
+                    console.print("[green]Changes committed.[/green]")
+                elif action == "Abort":
+                    console.print("[yellow]Push aborted.[/yellow]")
+                    return 1
 
         if not offline:
-            # Use our custom fetch function
-            fetch(remote="origin", branch=None, all_remotes=False, prune=False)
-
-            # Check if there are differences between local and remote
-            changes_made = False
+            # Check for remote changes
+            git_wrapper.fetch(remote)
             try:
-                print(f"[blue]Checking differences between {branch} and origin/{branch}[/blue]")
-                ahead_behind = git_wrapper.rev_list('--left-right', '--count', f'origin/{branch}...HEAD').split()
+                ahead_behind = git_wrapper.rev_list('--left-right', '--count', f'{remote}/{branch}...HEAD').split()
                 behind = int(ahead_behind[0])
                 ahead = int(ahead_behind[1])
 
-                if ahead > 0:
-                    console.print(f"[yellow]Your local branch is {ahead} commit(s) ahead of the remote branch.[/yellow]")
-                    changes_made = True
-                elif behind > 0:
+                if behind > 0 and not force:
                     console.print(f"[yellow]Your local branch is {behind} commit(s) behind the remote branch.[/yellow]")
-                    if not force:
-                        action = inquirer.select(
-                            message="How would you like to proceed?",
-                            choices=[
-                                "Pull and rebase",
-                                "Force push",
-                                "Create pull request",
-                                "Abort"
-                            ]
-                        ).execute()
-                        if action == "Pull and rebase":
-                            git_wrapper.pull('--rebase', 'origin', branch)
-                        elif action == "Force push":
-                            force = True
-                        elif action == "Create pull request":
-                            create_pr = True
-                        else:
-                            console.print("[yellow]Push aborted.[/yellow]")
-                            return
-                else:
-                    console.print("[yellow]Your local branch is up to date with the remote branch. No push needed.[/yellow]")
-                    return
-            except GitCommandError:
-                # If the remote branch doesn't exist, consider it as having differences
-                changes_made = True
-        else:
-            console.print("[yellow]No network connection. Proceeding with local push.[/yellow]")
-            changes_made = True
+                    action = inquirer.select(
+                        message="How would you like to proceed?",
+                        choices=[
+                            "Pull and rebase",
+                            "Force push",
+                            "Abort"
+                        ]
+                    ).execute()
 
-        if changes_made or create_pr:
-            try:
-                if create_pr:
-                    if not offline:
-                        console.print(f"[yellow]Creating pull request to merge {current_branch} into {branch}.[/yellow]")
-                        result = subprocess.run(
-                            ["gh", "pr", "create", "--base", branch, "--head", current_branch,
-                             "--title", f"Merge {current_branch} into {branch}",
-                             "--body", "Automated pull request from script"],
-                            capture_output=True, text=True, check=True
-                        )
-                        console.print(f"[green]Created pull request to merge {current_branch} into {branch}[/green]")
+                    if action == "Pull and rebase":
+                        git_wrapper.pull('--rebase', remote, branch)
+                    elif action == "Force push":
+                        force = True
                     else:
-                        console.print("[yellow]No network connection. Unable to create pull request.[/yellow]")
-                else:
-                    if not offline:
-                        if force:
-                            git_wrapper.push('origin', branch, '--force')
-                        else:
-                            git_wrapper.push('origin', branch)
-                        console.print(f"[green]Pushed changes to {branch}[/green]")
-                    else:
-                        console.print("[yellow]No network connection. Changes will be pushed when online.[/yellow]")
-            except (GitCommandError, subprocess.CalledProcessError) as e:
-                console.print(f"[red]Error: {e}[/red]")
+                        console.print("[yellow]Push aborted.[/yellow]")
+                        return 1
+
+            except GitCommandError:
+                # Remote branch doesn't exist yet
+                pass
+
+            # Push changes
+            git_wrapper.push(remote, branch, force=force)
+            console.print(f"[green]Successfully pushed to {remote}/{branch}[/green]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+        return 1
+
+    return 0
 
 
 #
@@ -3071,6 +3220,12 @@ def pull(
                 remote_commit = git_wrapper.rev_parse(f'{remote}/{branch.name}')
 
                 if local_commit != remote_commit:
+                    # Check if branch is in a worktree
+                    is_worktree, worktree_path = git_wrapper.is_worktree(branch.name)
+                    if is_worktree:
+                        console.print(f"[yellow]Skipping branch {branch.name} - it's used in worktree at {worktree_path}[/yellow]")
+                        continue
+
                     git_wrapper.checkout(branch.name)
                     console.print(f"[blue]Updating branch {branch.name}...[/blue]")
                     try:
@@ -4038,21 +4193,227 @@ def comment(
 
 
 #
+# Worktree commands
+#
+worktree_app = typer.Typer(help="Manage Git worktrees")
+app.add_typer(worktree_app, name="worktree")
+
+@worktree_app.command(name="ls")
+def worktree_ls():
+    """
+    List all worktrees in the repository.
+    """
+    try:
+        result = git_wrapper.list_worktrees()
+        # Create a table for better formatting
+        table = Table(title="Git Worktrees")
+        table.add_column("Path", style="cyan")
+        table.add_column("Branch", style="green")
+        table.add_column("Commit", style="yellow")
+
+        # Parse the worktree list output
+        for line in result.split('\n'):
+            if line.strip():
+                parts = line.split()
+                path = parts[0]
+                commit = parts[1] if len(parts) > 1 else ""
+                # Look for [branch_name] pattern in the output
+                branch = ""
+                for part in parts[2:]:  # Start from third part
+                    if part.startswith('[') and part.endswith(']'):
+                        branch = part[1:-1]  # Remove brackets
+                        break
+                table.add_row(path, branch, commit)
+
+        console.print(table)
+    except GitCommandError as e:
+        console.print(f"[red]Error listing worktrees: {e}[/red]")
+
+@worktree_app.command(name="add")
+def worktree_add(
+    branch: str = typer.Argument(..., help="Branch to checkout or create"),
+    path: str = typer.Argument(..., help="Path where to create the worktree")
+):
+    """
+    Add a new worktree.
+
+    If the branch doesn't exist, it will be created from the current HEAD.
+    The path should be relative to the current repository root or absolute.
+
+    Example:
+        gf worktree add feature/test ../tc-worktrees/test
+    """
+    try:
+        # Check if branch exists
+        if branch not in git_wrapper.get_branches():
+            # Create branch from current HEAD
+            current = git_wrapper.get_current_branch()
+            console.print(f"[yellow]Branch '{branch}' doesn't exist, creating from {current}[/yellow]")
+            git_wrapper.create_branch(branch)
+
+        # Now create the worktree
+        result = git_wrapper.add_worktree(path, branch)
+        console.print(f"[green]Successfully created worktree at {path}[/green]")
+        if result:
+            console.print(result)
+    except GitCommandError as e:
+        console.print(f"[red]Error adding worktree: {e}[/red]")
+
+@worktree_app.command(name="rm")
+def worktree_rm(
+    path_or_branch: Optional[str] = typer.Argument(None, help="Path of the worktree or branch name to remove"),
+    force: bool = typer.Option(False, "-f", "--force", help="Force removal even with uncommitted changes")
+):
+    """
+    Remove a worktree.
+
+    You can specify either:
+    - The full path as shown in 'worktree ls'
+    - The branch name (e.g. 'feature/test')
+    - No argument for interactive selection
+
+    Use --force to remove even if there are uncommitted changes.
+
+    Example:
+        gf worktree rm  # Interactive selection
+        gf worktree rm feature/test
+        gf worktree rm feature/test -f  # Force remove with uncommitted changes
+    """
+    try:
+        # Get main repo path
+        main_repo = os.path.realpath(git_wrapper.repo.working_dir)
+
+        # If no path specified, show interactive selection
+        if path_or_branch is None:
+            # Get list of worktrees
+            worktree_output = git_wrapper.list_worktrees()
+            choices = []
+            for line in worktree_output.split('\n'):
+                if line.strip():
+                    parts = line.split()
+                    path = parts[0]
+                    # Skip main repository worktree
+                    if os.path.realpath(path) == main_repo:
+                        continue
+                    # Look for [branch_name] pattern
+                    branch = "unknown"
+                    for part in parts[2:]:
+                        if part.startswith('[') and part.endswith(']'):
+                            branch = part[1:-1]
+                            break
+                    choices.append(f"{branch} ({path})")
+
+            if not choices:
+                console.print("[yellow]No removable worktrees found.[/yellow]")
+                return 0
+
+            selected = inquirer.select(
+                message="Select worktree to remove:",
+                choices=choices
+            ).execute()
+
+            # Extract branch name from selection
+            path_or_branch = selected.split(" (")[0]
+
+        # Check if input is a branch name
+        is_worktree, worktree_path = git_wrapper.is_worktree(path_or_branch)
+        if is_worktree:
+            path = worktree_path
+            branch = path_or_branch
+        else:
+            # If not a branch name, use the input as a path and try to find the branch
+            path = path_or_branch
+            # Get branch from path by checking all worktrees
+            branch = None
+            for b in git_wrapper.get_local_branches():
+                is_wt, wt_path = git_wrapper.is_worktree(b)
+                if is_wt and os.path.realpath(wt_path) == os.path.realpath(path):
+                    branch = b
+                    break
+            if not branch:
+                console.print(f"[red]Error: Could not find branch for worktree at {path}[/red]")
+                return 1
+
+        # Never remove the main repository worktree
+        if os.path.realpath(path) == main_repo:
+            console.print("[red]Error: Cannot remove main repository worktree[/red]")
+            console.print("[yellow]Use 'gf checkout' to switch branches in the main repository[/yellow]")
+            return 1
+
+        # Check if we're in the worktree we're trying to remove
+        current_dir = os.path.realpath(os.getcwd())
+        in_removed_worktree = current_dir == os.path.realpath(path)
+
+        try:
+            # Remove the worktree
+            git_wrapper.remove_worktree(path, force)
+            console.print(f"[green]Successfully removed worktree at {path}[/green]")
+
+            # Clean up refs in a separate process to avoid blocking
+            if os.name != 'nt':  # Not on Windows
+                os.system(f'(git update-ref -d refs/heads/{branch} && git gc --auto) > /dev/null 2>&1 &')
+            else:  # On Windows
+                os.system(f'start /b cmd /c "git update-ref -d refs/heads/{branch} && git gc --auto > nul 2>&1"')
+
+            # If we were in the worktree, show message and change directory
+            if in_removed_worktree:
+                console.print("\n[yellow]Note: Current directory no longer exists.[/yellow]")
+                console.print(f"[yellow]Please run: cd {main_repo}[/yellow]")
+                os.chdir(main_repo)
+
+        except GitCommandError as e:
+            if "modified or untracked files" in str(e):
+                console.print("[red]Error: Worktree contains modified or untracked files[/red]")
+                console.print("[yellow]Use 'gf worktree rm feature/test -f' to force remove[/yellow]")
+                return 1
+            raise
+
+    except GitCommandError as e:
+        console.print(f"[red]Error removing worktree: {e}[/red]")
+        return 1
+    except OSError:
+        # Don't show the message again, it was already shown before the chdir failed
+        return 1
+
+    return 0
+
+@worktree_app.command(name="prune")
+def worktree_prune():
+    """
+    Prune worktree administrative files with unreachable working trees.
+    """
+    try:
+        result = git_wrapper.repo.git.worktree('prune')
+        console.print("[green]Successfully pruned worktree administrative files[/green]")
+        if result:
+            console.print(result)
+    except GitCommandError as e:
+        console.print(f"[red]Error pruning worktrees: {e}[/red]")
+
+
+#
 # Command: Doc
 #
 @app.command()
 def doc(
     ctx: typer.Context,
-    title: str = typer.Option(None,  help="The title of the document"),
-    toc:  bool = typer.Option(False, help="Whether to create a table of contents"),
+    title: str = typer.Option(None, help="The title of the document"),
+    toc: bool = typer.Option(False, help="Whether to create a table of contents"),
+    full: bool = typer.Option(False, "-f", "--full", help="Show complete documentation (default: top section only)")
 ) -> None:
     """
-    Re-create the documentation and write it to the output file.
+    Generate documentation for the script.
 
-    This command generates documentation for the script, including an optional
-    table of contents and custom title.
+    By default, shows only the top section with overview and basic usage.
+    Use --full to see complete documentation including all commands.
+
+    Examples:
+        gf doc  # Show top section only
+        gf doc --full  # Show complete documentation
+        gf doc --toc  # Include table of contents
+        gf doc --title "My Git Flow" # Custom title
     """
-    result = DocGenerator.generate_doc(__file__, title, toc)
+    result = DocGenerator.generate_doc(__file__, title, toc, full_doc=full)
     print(result)
 
 
