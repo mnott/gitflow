@@ -1018,23 +1018,24 @@ def finish(
 
         # Delete the branch if requested
         if delete:
-            # First remove the worktree if it exists
-            if is_worktree:
+            # Only remove worktree if it's not the main repo
+            if is_worktree and os.path.realpath(worktree_path) != main_repo:
                 try:
                     git_wrapper.remove_worktree(worktree_path, force=True)
                     console.print(f"[green]Removed worktree at {worktree_path}[/green]")
                 except GitCommandError as e:
                     console.print(f"[yellow]Warning: Could not remove worktree: {e}[/yellow]")
 
-            # Delete the local branch
-            try:
-                git_wrapper.delete_branch(branch)
-                console.print(f"[green]Deleted local branch {branch}[/green]")
-            except GitCommandError as e:
-                console.print(f"[yellow]Warning: Could not delete local branch: {e}[/yellow]")
+            # Delete the local branch if it's not develop/main
+            if branch not in ['develop', 'main']:
+                try:
+                    git_wrapper.delete_branch(branch)
+                    console.print(f"[green]Deleted local branch {branch}[/green]")
+                except GitCommandError as e:
+                    console.print(f"[yellow]Warning: Could not delete local branch: {e}[/yellow]")
 
-            # If we were in the worktree that was removed
-            if is_worktree and os.path.realpath(worktree_path) == os.path.realpath(os.getcwd()):
+            # If we were in a worktree that was removed
+            if is_worktree and os.path.realpath(worktree_path) != main_repo and os.path.realpath(worktree_path) == os.path.realpath(os.getcwd()):
                 console.print("\n[yellow]Note: Current directory no longer exists.[/yellow]")
                 console.print(f"[yellow]Please run: cd {main_repo}[/yellow]")
                 os.chdir(main_repo)
