@@ -126,8 +126,11 @@ class GitWrapper:
     # -----------------------------------
 
     def create_branch(self, branch_name):
-        """Create a new branch."""
-        self.repo.git.branch(branch_name)
+        """Create a new branch from current HEAD."""
+        try:
+            self.repo.git.branch(branch_name)
+        except GitCommandError as e:
+            raise GitCommandError(f"Failed to create branch: {e}")
 
     def rename_branch(self, old_name, new_name):
         """Rename an existing branch."""
@@ -620,3 +623,92 @@ class GitWrapper:
         except GitCommandError as e:
             self.console.print(f"[red]Error executing git show: {e}[/red]")
             raise
+
+    # -----------------------------------
+    # Worktree Operations
+    # -----------------------------------
+
+    def list_worktrees(self):
+        """List all worktrees in the repository."""
+        try:
+            return self.repo.git.worktree('list')
+        except GitCommandError as e:
+            self.console.print(f"[red]Error listing worktrees: {e}[/red]")
+            raise
+
+    def add_worktree(self, path, branch=None, new_branch=None):
+        """Add a new worktree.
+
+        Args:
+            path (str): Path where to create the worktree
+            branch (str, optional): Existing branch to checkout
+            new_branch (str, optional): Create and checkout new branch
+        """
+        args = []
+        if new_branch:
+            args.extend(['-b', new_branch])
+        args.append(path)
+        if branch:
+            args.append(branch)
+
+        try:
+            return self.repo.git.worktree('add', *args)
+        except GitCommandError as e:
+            self.console.print(f"[red]Error adding worktree: {e}[/red]")
+            raise
+
+    def remove_worktree(self, path, force=False):
+        """Remove a worktree.
+
+        Args:
+            path (str): Path of the worktree to remove
+            force (bool): Force removal even with uncommitted changes
+        """
+        args = ['remove']
+        if force:
+            args.append('--force')
+        args.append(path)
+
+        try:
+            return self.repo.git.worktree(*args)
+        except GitCommandError as e:
+            self.console.print(f"[red]Error removing worktree: {e}[/red]")
+            raise
+
+    def is_worktree(self, branch):
+        """Check if a branch is currently used in a worktree.
+
+        Args:
+            branch (str): Branch name to check
+
+        Returns:
+            tuple: (bool, str) - (is_worktree, worktree_path) or (False, None)
+        """
+        try:
+            worktree_list = self.repo.git.worktree('list', '--porcelain').split('\n')
+            current_worktree = None
+            current_branch = None
+
+            for line in worktree_list:
+                if line.startswith('worktree '):
+                    current_worktree = line.split(' ', 1)[1]
+                elif line.startswith('branch '):
+                    current_branch = line.split('refs/heads/', 1)[1]
+                    if current_branch == branch:
+                        return True, current_worktree
+                elif line == '':
+                    current_worktree = None
+                    current_branch = None
+
+            return False, None
+        except GitCommandError:
+            return False, None
+
+    def prune_refs(self):
+        """Update branch list by pruning stale refs."""
+        try:
+            self.repo.git.fetch('--prune')  # Prune remote branches
+            self.repo.git.remote('prune', 'origin')  # Prune remote tracking branches
+            self.repo.git.gc('--prune=now')  # Clean up any loose objects
+        except GitCommandError as e:
+            raise GitCommandError(f"Failed to prune refs: {e}")

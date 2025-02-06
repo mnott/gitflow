@@ -93,7 +93,7 @@ class DocGenerator:
 
 
     @staticmethod
-    def convert_to_markdown(docstrings: List[DocItem], filename: str, title: str, toc: bool) -> str:
+    def convert_to_markdown(docstrings: List[DocItem], filename: str, title: str, toc: bool, full_doc: bool = False) -> str:
         """
         Convert extracted docstrings to Markdown format.
 
@@ -102,6 +102,7 @@ class DocGenerator:
             filename             (str): The name of the source file.
             title                (str): The title for the documentation.
             toc                 (bool): Whether to include a table of contents.
+            full_doc           (bool): Whether to show complete documentation (default: False).
 
         Returns:
             str: The generated Markdown content.
@@ -109,25 +110,31 @@ class DocGenerator:
         base_name = os.path.splitext(os.path.basename(filename))[0]
         content = f"# {title or base_name}\n\n"
 
-        if toc:
-            content += "## Table of Contents\n\n"
-            for i, doc_item in enumerate(docstrings, 1):
-                anchor = doc_item.name.lower().replace(" ", "-").replace(".", "")
-                content += f"{i}. [{doc_item.name}](#{anchor})\n"
-            content += "\n"
+        # Always show module docstring (top section)
+        module_doc = next((doc for doc in docstrings if doc.type == "module"), None)
+        if module_doc:
+            content += module_doc.doc.strip() + "\n\n"
 
-        for doc_item in docstrings:
-            if doc_item.type == "module":
-                content += doc_item.doc.strip() + "\n\n"
-            else:
-                content += f"## {doc_item.name}\n\n"
-                content += doc_item.doc.strip() + "\n\n"
+        if full_doc:
+            if toc:
+                content += "## Table of Contents\n\n"
+                for i, doc_item in enumerate(docstrings, 1):
+                    if doc_item.type != "module":  # Skip module in TOC
+                        anchor = doc_item.name.lower().replace(" ", "-").replace(".", "")
+                        content += f"{i}. [{doc_item.name}](#{anchor})\n"
+                content += "\n"
+
+            # Add rest of documentation
+            for doc_item in docstrings:
+                if doc_item.type != "module":  # Skip module doc as it's already added
+                    content += f"## {doc_item.name}\n\n"
+                    content += doc_item.doc.strip() + "\n\n"
 
         return content
 
 
     @classmethod
-    def generate_doc(cls, filename: str, title: str = None, toc: bool = False) -> str:
+    def generate_doc(cls, filename: str, title: str = None, toc: bool = False, full_doc: bool = False) -> str:
         """
         Generate documentation for a Python file.
 
@@ -137,10 +144,11 @@ class DocGenerator:
             filename         (str): The path to the Python file.
             title  (str, optional): The title for the documentation. Defaults to the filename.
             toc   (bool, optional): Whether to include a table of contents. Defaults to False.
+            full_doc (bool, optional): Whether to show complete documentation. Defaults to False.
 
         Returns:
             str: The generated Markdown documentation.
         """
         module = cls.import_path(filename)
         docstrings = cls.extract_docstrings(filename)
-        return cls.convert_to_markdown(docstrings, filename, title, toc)
+        return cls.convert_to_markdown(docstrings, filename, title, toc, full_doc)
