@@ -509,6 +509,41 @@ cdworktree feature/test
 
 When we are finished, we can finish the branch right
 from here, or we can push the branch to the remote.
+
+One way to finish the branch is to run:
+
+```bash
+./gitflow.py worktree finish
+```
+
+You will then typically get this message:
+
+```
+Pushed changes to feature/test
+Removed worktree at ..../test
+
+Note: Current directory no longer exists.
+Please run:
+1. cd ..../test
+2. gf checkout feature/test
+3. gf finish
+```
+
+That means we need to go back to the main repository and
+checkout the branch again:
+
+```bash
+cd ..../test
+./gitflow.py checkout feature/test
+```
+
+Then we can finish the branch:
+
+```bash
+./gitflow.py finish
+```
+
+
 We could at some point also just decide to remove the
 worktree:
 
