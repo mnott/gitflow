@@ -1060,6 +1060,7 @@ def finish(
 
 @app.command()
 def sync(
+    remote: str = typer.Option("origin", help="Remote to push to"),
     push_changes: bool = typer.Option(True, "--push/--no-push", help="Push changes to remote after syncing"),
     message: Optional[str] = typer.Option(None, "-m", "--message", help="Commit message for the merge commit"),
     body: Optional[str] = typer.Option(None, "-b", "--body", help="Commit message body"),
@@ -1087,7 +1088,7 @@ def sync(
 
         # Push develop if requested
         if push_changes:
-            push(branch='develop', force=force, message=message, body=body)
+            push(remote=remote, branch='develop', force=force, message=message, body=body)
 
         # Then merge develop into main
         git_wrapper.checkout('main')
@@ -1099,7 +1100,7 @@ def sync(
 
         # Push main if requested
         if push_changes:
-            push(branch='main', force=force, message=message, body=body)
+            push(remote="origin", branch='main', force=force, message=message, body=body)
 
         # Return to original branch unless we're already there
         if original_branch != git_wrapper.get_current_branch():
