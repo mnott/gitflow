@@ -2811,7 +2811,7 @@ def merge(
     source: Optional[str] = typer.Argument(None, help="The source branch to merge from"),
     target: Optional[str] = typer.Argument(None, help="The target branch to merge into"),
     squash: bool = typer.Option(False, "--squash", help="Squash commits when merging"),
-    no_ff:  bool = typer.Option(True, "--no-ff", help="Create a merge commit even when fast-forward is possible")
+    no_ff: bool = typer.Option(True, "--no-ff", help="Create a merge commit even when fast-forward is possible")
 ):
     """Merge one local branch into another."""
     original_branch = git_wrapper.get_current_branch()
@@ -2824,13 +2824,13 @@ def merge(
         if target is None:
             target = git_wrapper.get_current_branch()
 
-        # Check if either branch is in a worktree
-        for branch in [source, target]:
-            is_worktree, worktree_path = git_wrapper.is_worktree(branch)
-            if is_worktree:
-                console.print(f"[yellow]Branch '{branch}' is used in worktree at {worktree_path}[/yellow]")
-                console.print("[yellow]To merge this branch, cd to the worktree directory first.[/yellow]")
-                return
+        # Check if target branch is in a worktree
+        is_worktree, worktree_path = git_wrapper.is_worktree(target)
+        current_dir = os.path.realpath(os.getcwd())
+        if is_worktree and os.path.realpath(worktree_path) != current_dir:
+            console.print(f"[yellow]Target branch '{target}' is used in worktree at {worktree_path}[/yellow]")
+            console.print("[yellow]To merge into this branch, cd to the worktree directory first.[/yellow]")
+            return
 
         # Check for unstaged changes
         if git_wrapper.is_dirty(untracked_files=True):
@@ -2846,197 +2846,30 @@ def merge(
             ).execute()
 
             if action == "Commit changes":
-                api_key = git_wrapper.get_git_metadata("openai.apikey")
-                if api_key:
-                    use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
-                    if use_ai:
-                        generated_message = explain(files=None, commit=None, start=None, end=None, as_command=False, days=None, daily_summary=False, summary=False, improve=False, custom_prompt=None, examples=False)
-                        if generated_message:
-                            console.print("[green]AI-generated commit message:[/green]")
-                            console.print(generated_message)
-
-                            edit_message = inquirer.confirm(message="Do you want to edit this message?", default=True).execute()
-                            if edit_message:
-                                full_commit_message = edit_in_editor(generated_message)
-                            else:
-                                full_commit_message = generated_message
-                        else:
-                            console.print("[yellow]Failed to generate AI message. Falling back to manual entry.[/yellow]")
-                            full_commit_message = git_wrapper.get_manual_commit_message()
-                    else:
-                        full_commit_message = git_wrapper.get_manual_commit_message()
-                else:
-                    full_commit_message = git_wrapper.get_manual_commit_message()
-
+                full_commit_message = get_commit_message()
                 git_wrapper.add('.')
                 git_wrapper.commit(full_commit_message)
                 console.print("[green]Changes committed.[/green]")
             elif action == "Stash changes":
-                git_wrapper.stash('save', f"Stashed changes before merging {source} into {target}")
+                git_wrapper.stash('save', f"Stashed changes before merging {source}")
                 console.print("[green]Changes stashed.[/green]")
             elif action == "Abort":
-                console.print("[yellow]Merge operation aborted.[/yellow]")
+                console.print("[yellow]Merge aborted.[/yellow]")
                 return
-
-        # Check if the merge can be fast-forwarded
-        merge_base = git_wrapper.merge_base(target, source).strip()
-        target_head = git_wrapper.rev_parse(target).strip()
-        source_head = git_wrapper.rev_parse(source).strip()
-
-        if merge_base == target_head:
-            console.print(f"[green]Fast-forwarding {target} to {source}[/green]")
-            git_wrapper.checkout(target)
-            git_wrapper.merge(source, ff_only=True)
-            return
-
-        # Check if there are differences between branches
-        try:
-            rev_list = git_wrapper.rev_list('--left-right', '--count', f'{target}...{source}')
-            ahead, behind = map(int, rev_list.split())
-            if ahead == 0 and behind == 0:
-                console.print(f"[yellow]No differences found between {source} and {target}. No merge needed.[/yellow]")
-                return
-            else:
-                console.print(f"[blue]Found differences: {source} is {behind} commit(s) behind and {ahead} commit(s) ahead of {target}.[/blue]")
-        except GitCommandError:
-            console.print(f"[yellow]Unable to determine differences between {source} and {target}. Proceeding with merge.[/yellow]")
 
         # Perform the merge
-        git_wrapper.checkout(target)
-
         try:
-            # Force conflict detection by using --no-commit
-            if squash:
-                git_wrapper.merge(source, squash=True, commit=False)
-            else:
-                git_wrapper.merge(source, no_ff=no_ff, commit=False)
-
+            git_wrapper.merge(source, squash=squash, no_ff=no_ff)
+            console.print(f"[green]Successfully merged {source} into {target}[/green]")
         except GitCommandError as e:
-            console.print(f"[yellow]Merge conflicts detected. Please resolve the conflicts.[/yellow]")
-            # Ensure the conflict markers are in place before proceeding
-            status = git_wrapper.status('--porcelain')
-            if any(line.startswith('UU') for line in status.split('\n')):
-                return continue_merge()
-            else:
-                console.print("[red]Error: Merge conflicts detected, but no conflict markers found. Aborting merge.[/red]")
-                git_wrapper.merge(abort=True)
-                return
-
-        # Check for conflicts
-        status = git_wrapper.status('--porcelain')
-        if status:
-            console.print(f"[yellow]Merge conflicts detected when merging {source} into {target}.[/yellow]")
-            conflicting_files = [line.split()[1] for line in status.split('\n') if line.startswith('UU')]
-            console.print("[yellow]Conflicting files:[/yellow]")
-            for file in conflicting_files:
-                console.print(f"[yellow]- {file}[/yellow]")
-
-            action = inquirer.select(
-                message="How would you like to proceed?",
-                choices=[
-                    "Open git mergetool",
-                    "Abort merge",
-                    "Continue (resolve manually later)"
-                ]
-            ).execute()
-
-            if action == "Open git mergetool":
-                try:
-                    subprocess.run(['git', 'mergetool'], check=True)
-                    status = git_wrapper.status('--porcelain')
-                    if not any(line.startswith('UU') for line in status.split('\n')):
-                        console.print("[green]Conflicts resolved. Continuing merge...[/green]")
-                        git_wrapper.commit(f"Merge branch '{source}' into {target}")
-                        # Cleanup .orig files
-                        for file in glob.glob('*.orig'):
-                            os.remove(file)
-                    else:
-                        console.print("[yellow]Please resolve conflicts, stage the changes, and run the merge command again to continue.[/yellow]")
-                except subprocess.CalledProcessError as e:
-                    console.print(f"[red]Error running git mergetool: {e}[/red]")
-                return
-            elif action == "Abort merge":
-                git_wrapper.merge(abort=True)
-                console.print("[yellow]Merge aborted.[/yellow]")
-            else:
-                console.print("[yellow]Please resolve conflicts, stage the changes, and run the merge command again to continue.[/yellow]")
-            return
-        else:
-            # No conflicts, complete the merge
-            if git_wrapper.is_dirty():  # Check if there are changes to commit
-                git_wrapper.commit(f"Merge branch '{source}' into {target}")
-                console.print(f"[green]Successfully merged {source} into {target}.[/green]")
-            else:
-                console.print(f"[yellow]Merge completed but there were no changes to commit.[/yellow]")
+            console.print(f"[red]Error merging: {e}[/red]")
+            return 1
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+        return 1
 
-    finally:
-        # Only checkout the original branch if there are no unresolved conflicts
-        if 'original_branch' in locals() and not any(line.startswith('UU') for line in git_wrapper.status('--porcelain').split('\n')):
-            git_wrapper.checkout(original_branch)
-            console.print(f"[green]Returned to {original_branch}[/green]")
-
-            # If changes were stashed, ask if the user wants to pop them
-            if 'action' in locals() and action == "Stash changes":
-                pop_stash = inquirer.confirm(message="Do you want to pop the stashed changes?", default=True).execute()
-                if pop_stash:
-                    try:
-                        git_wrapper.stash('pop')
-                        console.print("[green]Stashed changes reapplied.[/green]")
-                    except GitCommandError as e:
-                        console.print(f"[red]Error reapplying stashed changes: {e}[/red]")
-                        console.print("[yellow]Your changes are still in the stash. You may need to manually resolve conflicts.[/yellow]")
-
-
-def continue_merge():
-    try:
-        # Check if there are still conflicts
-        status = git_wrapper.status('--porcelain')
-        conflicting_files = [line.split()[1] for line in status.split('\n') if line.startswith('UU')]
-
-        if conflicting_files:
-            console.print("[yellow]There are still conflicting files:[/yellow]")
-            for file in conflicting_files:
-                console.print(f"[yellow]- {file}[/yellow]")
-
-            action = inquirer.select(
-                message="How would you like to proceed?",
-                choices=[
-                    "Open git mergetool",
-                    "Abort merge",
-                    "Continue (resolve manually later)"
-                ]
-            ).execute()
-
-            if action == "Open git mergetool":
-                try:
-                    subprocess.run(['git', 'mergetool'], check=True)
-                    status = git_wrapper.status('--porcelain')
-                    if not any(line.startswith('UU') for line in status.split('\n')):
-                        console.print("[green]Conflicts resolved. Continuing merge...[/green]")
-                        git_wrapper.commit("Merge conflicts resolved")
-                        # Cleanup .orig files
-                        for file in glob.glob('*.orig'):
-                            os.remove(file)
-                    else:
-                        console.print("[yellow]Please resolve conflicts, stage the changes, and run the merge command again to continue.[/yellow]")
-                except subprocess.CalledProcessError as e:
-                    console.print(f"[red]Error running git mergetool: {e}[/red]")
-                return
-            elif action == "Abort merge":
-                git_wrapper.merge(abort=True)
-                console.print("[yellow]Merge aborted.[/yellow]")
-            else:
-                console.print("[yellow]Please resolve conflicts, stage the changes, and run the merge command again to continue.[/yellow]")
-        else:
-            # Changes staged but not committed
-            git_wrapper.commit('--no-edit')
-            console.print(f"[green]Successfully completed the merge.[/green]")
-
-    except GitCommandError as e:
-        console.print(f"[red]Error during merge continuation: {e}[/red]")
+    return 0
 
 
 #
