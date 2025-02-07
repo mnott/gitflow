@@ -4386,8 +4386,20 @@ def worktree_finish(
             console.print("[yellow]Use 'gf finish' in the main repository instead[/yellow]")
             return 1
 
-        # Get main repository path
-        main_repo = os.path.realpath(git_wrapper.repo.working_dir)
+        # Get main repository path by finding the worktree that's not us
+        worktree_output = git_wrapper.list_worktrees()
+        main_repo = None
+        for line in worktree_output.split('\n'):
+            if line.strip():
+                path = line.split()[0]
+                if os.path.realpath(path) != os.path.realpath(worktree_path):
+                    main_repo = path
+                    break
+
+        if not main_repo:
+            console.print("[red]Error: Could not find main repository path[/red]")
+            return 1
+
         current_dir = os.path.realpath(os.getcwd())
 
         # Double check we're actually in the worktree directory
