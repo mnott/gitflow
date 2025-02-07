@@ -591,6 +591,7 @@ import re
 import tempfile
 import subprocess
 import os
+import time
 
 # Local imports
 from client import AIClient, GitConfig, DocGenerator, GitWrapper
@@ -4188,6 +4189,8 @@ def worktree_ls():
         # Parse the worktree list output
         for line in result.split('\n'):
             if line.strip():
+                if '[main-worktree]' in line:
+                    continue
                 parts = line.split()
                 path = parts[0]
                 commit = parts[1] if len(parts) > 1 else ""
@@ -4212,12 +4215,69 @@ def worktree_add(
     Add a new worktree.
 
     If the branch doesn't exist, it will be created from the current HEAD.
+    If the branch exists in another worktree or main repo, you'll be offered to move it.
     The path should be relative to the current repository root or absolute.
 
     Example:
         gf worktree add feature/test ../tc-worktrees/test
     """
     try:
+        # Check if branch exists in a worktree
+        is_worktree, existing_path = git_wrapper.is_worktree(branch)
+        main_repo = os.path.realpath(git_wrapper.repo.working_dir)
+        current_branch = git_wrapper.get_current_branch()
+
+        # Clean up any existing temp branches and worktrees at the target path
+        if os.path.exists(path):
+            try:
+                git_wrapper.remove_worktree(path, force=True)
+            except GitCommandError:
+                pass
+            try:
+                shutil.rmtree(path)
+            except (OSError, IOError):
+                pass
+
+        # Clean up any existing temp branches
+        for b in git_wrapper.get_branches():
+            branch_name = b.name
+            if branch_name.startswith('_gf_temp_'):
+                try:
+                    git_wrapper.delete_branch(branch_name, quiet=True)  # Add quiet parameter to GitWrapper
+                except GitCommandError:
+                    pass
+
+        if is_worktree or (branch == current_branch and os.path.realpath(os.getcwd()) == main_repo):
+            is_main = os.path.realpath(existing_path) == main_repo if is_worktree else True
+            location = "main repository" if is_main else f"worktree at {existing_path}"
+
+            # Ask if user wants to move the branch to new worktree
+            console.print(f"[yellow]Branch '{branch}' is already used in {location}[/yellow]")
+            move = inquirer.confirm(
+                message="Would you like to move it to the new location?",
+                default=True
+            ).execute()
+
+            if move:
+                # If we're currently on the branch we want to move, switch to develop first
+                if current_branch == branch:
+                    git_wrapper.checkout('develop')
+                    console.print("[green]Switched to develop branch temporarily[/green]")
+
+                # Now create the worktree with the branch directly
+                git_wrapper.add_worktree(path, branch)
+                console.print(f"[green]Successfully moved worktree for {branch} to {path}[/green]")
+
+                # If it was in another worktree (not main), remove that worktree
+                if not is_main and existing_path != main_repo:
+                    git_wrapper.remove_worktree(existing_path, force=True)
+                    console.print(f"[green]Removed old worktree at {existing_path}[/green]")
+
+                return
+            else:
+                console.print("[yellow]Operation cancelled.[/yellow]")
+                return
+
         # Check if branch exists
         if branch not in git_wrapper.get_branches():
             # Create branch from current HEAD
@@ -4232,124 +4292,101 @@ def worktree_add(
             console.print(result)
     except GitCommandError as e:
         console.print(f"[red]Error adding worktree: {e}[/red]")
+        # Try to clean up on error
+        try:
+            if os.path.exists(path):
+                git_wrapper.remove_worktree(path, force=True)
+                shutil.rmtree(path)
+        except:
+            pass
 
 @worktree_app.command(name="rm")
 def worktree_rm(
     path_or_branch: Optional[str] = typer.Argument(None, help="Path of the worktree or branch name to remove"),
     force: bool = typer.Option(False, "-f", "--force", help="Force removal even with uncommitted changes")
 ):
-    """
-    Remove a worktree.
-
-    You can specify either:
-    - The full path as shown in 'worktree ls'
-    - The branch name (e.g. 'feature/test')
-    - No argument for interactive selection
-
-    Use --force to remove even if there are uncommitted changes.
-
-    Example:
-        gf worktree rm  # Interactive selection
-        gf worktree rm feature/test
-        gf worktree rm feature/test -f  # Force remove with uncommitted changes
-    """
     try:
-        # Get main repo path
-        main_repo = os.path.realpath(git_wrapper.repo.working_dir)
+        # Get main repo path - get it directly from git_wrapper
+        main_repo = os.path.realpath(git_wrapper.get_repo_root())
+        current_dir = os.path.realpath(os.getcwd())
 
-        # If no path specified, show interactive selection
-        if path_or_branch is None:
-            # Get list of worktrees
-            worktree_output = git_wrapper.list_worktrees()
-            choices = []
-            for line in worktree_output.split('\n'):
-                if line.strip():
-                    parts = line.split()
-                    path = parts[0]
-                    # Skip main repository worktree
-                    if os.path.realpath(path) == main_repo:
-                        continue
-                    # Look for [branch_name] pattern
-                    branch = "unknown"
-                    for part in parts[2:]:
-                        if part.startswith('[') and part.endswith(']'):
-                            branch = part[1:-1]
-                            break
+        # Get list of worktrees
+        worktree_output = git_wrapper.list_worktrees()
+
+        # Find the main repo path from worktree list
+        for line in worktree_output.split('\n'):
+            if line.strip() and '[main-worktree]' in line:
+                main_repo = os.path.realpath(line.split()[0])
+                break
+
+        # Parse worktree list and exclude main working tree
+        choices = []
+        for line in worktree_output.split('\n'):
+            if line.strip() and '[main-worktree]' not in line:
+                parts = line.split()
+                path = parts[0]
+                # Look for [branch_name] pattern
+                branch = None
+                for part in parts[2:]:
+                    if part.startswith('[') and part.endswith(']'):
+                        branch = part[1:-1]
+                        break
+                if branch:
                     choices.append(f"{branch} ({path})")
 
-            if not choices:
-                console.print("[yellow]No removable worktrees found.[/yellow]")
-                return 0
+        if not choices:
+            console.print("[yellow]No removable worktrees found.[/yellow]")
+            return
 
+        # Let user select which worktree to remove
+        if not path_or_branch:
             selected = inquirer.select(
                 message="Select worktree to remove:",
                 choices=choices
             ).execute()
-
-            # Extract branch name from selection
-            path_or_branch = selected.split(" (")[0]
-
-        # Check if input is a branch name
-        is_worktree, worktree_path = git_wrapper.is_worktree(path_or_branch)
-        if is_worktree:
-            path = worktree_path
-            branch = path_or_branch
+            if not selected:
+                console.print("\nAborted.")
+                return
+            path = selected.split('(')[1].rstrip(')')
+            branch = selected.split(' (')[0]
         else:
-            # If not a branch name, use the input as a path and try to find the branch
-            path = path_or_branch
-            # Get branch from path by checking all worktrees
-            branch = None
-            for b in git_wrapper.get_local_branches():
-                is_wt, wt_path = git_wrapper.is_worktree(b)
-                if is_wt and os.path.realpath(wt_path) == os.path.realpath(path):
-                    branch = b
-                    break
-            if not branch:
-                console.print(f"[red]Error: Could not find branch for worktree at {path}[/red]")
-                return 1
+            # Handle direct path/branch input
+            is_worktree, worktree_path = git_wrapper.is_worktree(path_or_branch)
+            if is_worktree:
+                path = worktree_path
+            else:
+                path = path_or_branch
 
-        # Never remove the main repository worktree
-        if os.path.realpath(path) == main_repo:
-            console.print("[red]Error: Cannot remove main repository worktree[/red]")
-            console.print("[yellow]Use 'gf checkout' to switch branches in the main repository[/yellow]")
-            return 1
+            # Get branch name from worktree info
+            for line in worktree_output.split('\n'):
+                if path in line:
+                    for part in line.split()[2:]:
+                        if part.startswith('[') and part.endswith(']'):
+                            branch = part[1:-1]
+                            break
 
-        # Check if we're in the worktree we're trying to remove
-        current_dir = os.path.realpath(os.getcwd())
-        in_removed_worktree = current_dir == os.path.realpath(path)
+        # Remove the worktree
+        git_wrapper.remove_worktree(path, force=force)
+        console.print(f"[green]Successfully removed worktree at {path}[/green]")
 
-        try:
-            # Remove the worktree
-            git_wrapper.remove_worktree(path, force)
-            console.print(f"[green]Successfully removed worktree at {path}[/green]")
+        # If we were in the removed worktree, suggest changing to main repo
+        in_removed_worktree = current_dir.startswith(os.path.realpath(path))
+        if in_removed_worktree:
+            console.print(f"[yellow]Note: Current directory no longer exists.[/yellow]")
+            console.print(f"[yellow]Please run: cd {main_repo}[/yellow]")
 
-            # Clean up refs in a separate process to avoid blocking
-            if os.name != 'nt':  # Not on Windows
-                os.system(f'(git update-ref -d refs/heads/{branch} && git gc --auto) > /dev/null 2>&1 &')
-            else:  # On Windows
-                os.system(f'start /b cmd /c "git update-ref -d refs/heads/{branch} && git gc --auto > nul 2>&1"')
-
-            # If we were in the worktree, show message and change directory
-            if in_removed_worktree:
-                console.print("\n[yellow]Note: Current directory no longer exists.[/yellow]")
-                console.print(f"[yellow]Please run: cd {main_repo}[/yellow]")
+        # Move branch back to main repo if it exists
+        if branch and branch not in ['HEAD', 'main', 'develop']:
+            try:
+                # Change to main repo before moving branch
                 os.chdir(main_repo)
-
-        except GitCommandError as e:
-            if "modified or untracked files" in str(e):
-                console.print("[red]Error: Worktree contains modified or untracked files[/red]")
-                console.print("[yellow]Use 'gf worktree rm feature/test -f' to force remove[/yellow]")
-                return 1
-            raise
+                git_wrapper.checkout(branch)
+                console.print(f"[green]Moved branch '{branch}' back to main repository[/green]")
+            except (GitCommandError, OSError) as e:
+                console.print(f"[yellow]Note: Could not move branch '{branch}' back: {e}[/yellow]")
 
     except GitCommandError as e:
         console.print(f"[red]Error removing worktree: {e}[/red]")
-        return 1
-    except OSError:
-        # Don't show the message again, it was already shown before the chdir failed
-        return 1
-
-    return 0
 
 @worktree_app.command(name="prune")
 def worktree_prune():

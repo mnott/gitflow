@@ -136,57 +136,16 @@ class GitWrapper:
         """Rename an existing branch."""
         self.repo.git.branch('-m', old_name, new_name)
 
-    def delete_branch(self, branch, delete_remote=True, delete_local=True):
-        """Delete a branch locally and/or remotely.
-
-        Args:
-            branch (str): Name of the branch to delete
-            delete_remote (bool): Whether to delete the remote branch
-            delete_local (bool): Whether to delete the local branch
-        """
+    def delete_branch(self, branch_name: str, quiet: bool = False) -> None:
+        """Delete a branch."""
         try:
-            # Check what actually exists before announcing actions
-            local_exists = branch in [b.name for b in self.repo.branches]
-            remote_exists = False
-            if self.check_network_connection():
-                try:
-                    self.repo.git.ls_remote('--exit-code', 'origin', f'refs/heads/{branch}')
-                    remote_exists = True
-                except GitCommandError:
-                    pass
-
-            # Print what we're actually going to do
-            actions = []
-            if delete_remote and remote_exists:
-                actions.append("remote")
-            if delete_local and local_exists:
-                actions.append("local")
-            if actions:
-                self.console.print(f"[blue]Deleting {' and '.join(actions)} branch{'es' if len(actions) > 1 else ''} '{branch}'...[/blue]")
-
-            # Handle remote deletion
-            if delete_remote and self.check_network_connection():
-                try:
-                    self.repo.git.push('origin', '--delete', branch)
-                    self.console.print(f"[green]Deleted remote branch {branch}[/green]")
-                except GitCommandError as e:
-                    if "remote ref does not exist" in str(e):
-                        pass
-                    else:
-                        raise
-
-            # Handle local deletion
-            if delete_local and local_exists:
-                # Only switch to develop if we're deleting the current branch locally
-                current_branch = self.repo.active_branch.name
-                if current_branch == branch:
-                    self.repo.git.checkout('develop')
-
-                self.repo.git.branch('-D', branch)
-                self.console.print(f"[green]Deleted local branch {branch}[/green]")
-
+            self.repo.delete_head(branch_name)
+            if not quiet:
+                self.console.print(f"Deleted local branch {branch_name}")
         except GitCommandError as e:
-            self.console.print(f"[yellow]Could not delete branch {branch}: {e}[/yellow]")
+            if not quiet:
+                self.console.print(f"Error deleting branch {branch_name}: {e}")
+            raise
 
     def checkout(self, branch, start_point=None, create=False, force=False):
         """Checkout a branch, optionally creating it or forcing the operation."""
@@ -628,10 +587,53 @@ class GitWrapper:
     # Worktree Operations
     # -----------------------------------
 
-    def list_worktrees(self):
-        """List all worktrees in the repository."""
+    def list_worktrees(self) -> str:
+        """List all worktrees in the repository.
+
+        Returns a formatted string with worktree information.
+        The main worktree is marked with '[main-worktree]' in the output.
+        """
         try:
-            return self.repo.git.worktree('list')
+            # Get the porcelain output first to identify the main worktree
+            porcelain_output = self.repo.git.worktree('list', '--porcelain')
+            worktrees = []
+            current_worktree = {}
+
+            # Parse porcelain output to identify main worktree
+            for line in porcelain_output.split('\n'):
+                if line.startswith('worktree '):
+                    if current_worktree:
+                        worktrees.append(current_worktree)
+                    current_worktree = {'path': line.split(' ', 1)[1]}
+                elif line.startswith('bare'):
+                    current_worktree['bare'] = True
+                elif line.startswith('HEAD '):
+                    current_worktree['head'] = line.split(' ', 1)[1]
+                elif line.startswith('branch '):
+                    current_worktree['branch'] = line.split('refs/heads/', 1)[1]
+                elif line == '':
+                    if current_worktree:
+                        worktrees.append(current_worktree)
+                        current_worktree = {}
+
+            if current_worktree:
+                worktrees.append(current_worktree)
+
+            # The first worktree is always the main one
+            main_worktree_path = worktrees[0]['path'] if worktrees else None
+
+            # Now get the normal output and add the main-worktree marker
+            output = []
+            normal_list = self.repo.git.worktree('list')
+            for line in normal_list.split('\n'):
+                if line.strip():
+                    parts = line.split()
+                    path = parts[0]
+                    if path == main_worktree_path:
+                        line += ' [main-worktree]'
+                    output.append(line)
+
+            return '\n'.join(output)
         except GitCommandError as e:
             self.console.print(f"[red]Error listing worktrees: {e}[/red]")
             raise
