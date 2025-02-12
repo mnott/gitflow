@@ -3,7 +3,7 @@ from git import Repo, GitCommandError
 from InquirerPy import inquirer
 from pathlib import Path
 from rich.console import Console
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 import subprocess
 import sys
 
@@ -136,12 +136,66 @@ class GitWrapper:
         """Rename an existing branch."""
         self.repo.git.branch('-m', old_name, new_name)
 
-    def delete_branch(self, branch_name: str, quiet: bool = False) -> None:
-        """Delete a branch."""
+    def delete_branch(self, branch_name: str, delete_remote: bool = False, delete_local: bool = True, quiet: bool = False) -> None:
+        """Delete a branch locally and/or remotely."""
         try:
-            self.repo.delete_head(branch_name)
-            if not quiet:
-                self.console.print(f"Deleted local branch {branch_name}")
+            # Strip any "Local: " or "Remote: " prefix if present, but don't require it
+            if branch_name.startswith("Local: "):
+                branch_name = branch_name[7:]
+            elif branch_name.startswith("Remote: "):
+                branch_name = branch_name[8:]
+
+            # Check if we're on the branch we're trying to delete
+            current_branch = self.get_current_branch()
+            if current_branch == branch_name:
+                # Switch to a safe branch first
+                if 'develop' in self.repo.heads:
+                    self.repo.heads.develop.checkout()
+                else:
+                    self.repo.heads.main.checkout()
+                if not quiet:
+                    self.console.print(f"Switched to {self.get_current_branch()} before deleting {branch_name}")
+
+            if delete_local:
+                # Check if local branch exists before trying to delete
+                if branch_name in [h.name for h in self.repo.heads]:
+                    # Get branch status first
+                    status = self.get_branch_status(branch_name)
+                    if not quiet:
+                        self.console.print(f"Branch status for {branch_name}:")
+                        self.console.print(f"  Last commit: {status['last_commit']} - {status['last_commit_msg']}")
+                        if status['has_upstream']:
+                            self.console.print(f"  Ahead by {status['ahead_count']}, behind by {status['behind_count']} commits")
+                        else:
+                            self.console.print("  No upstream branch found")
+
+                    try:
+                        self.repo.delete_head(branch_name)
+                    except GitCommandError as e:
+                        if "not fully merged" in str(e):
+                            if not quiet:
+                                self.console.print("[yellow]Branch has unmerged changes. Use -f to force delete.[/yellow]")
+                            # Try force delete
+                            self.repo.git.branch('-D', branch_name)
+                        else:
+                            raise
+                    if not quiet:
+                        self.console.print(f"Deleted local branch {branch_name}")
+                elif not quiet:
+                    self.console.print(f"Local branch {branch_name} does not exist")
+
+            if delete_remote:
+                try:
+                    self.repo.git.push('origin', '--delete', branch_name)
+                    if not quiet:
+                        self.console.print(f"Deleted remote branch {branch_name}")
+                except GitCommandError as e:
+                    if "remote ref does not exist" in str(e):
+                        if not quiet:
+                            self.console.print(f"Remote branch {branch_name} does not exist")
+                    else:
+                        raise
+
         except GitCommandError as e:
             if not quiet:
                 self.console.print(f"Error deleting branch {branch_name}: {e}")
@@ -714,3 +768,105 @@ class GitWrapper:
             self.repo.git.gc('--prune=now')  # Clean up any loose objects
         except GitCommandError as e:
             raise GitCommandError(f"Failed to prune refs: {e}")
+
+    def get_branch_status(self, branch_name: str) -> dict:
+        """Get detailed status of a branch compared to its upstream.
+
+        Args:
+            branch_name (str): Name of the branch to check
+
+        Returns:
+            dict: Status information including:
+                - has_upstream: bool
+                - ahead_count: int
+                - behind_count: int
+                - upstream_name: str or None
+                - last_commit: str
+                - last_commit_msg: str
+        """
+        try:
+            branch = self.repo.heads[branch_name]
+            status = {
+                'has_upstream': False,
+                'ahead_count': 0,
+                'behind_count': 0,
+                'upstream_name': None,
+                'last_commit': str(branch.commit)[:8],
+                'last_commit_msg': branch.commit.message.strip()
+            }
+
+            # Get upstream info if it exists
+            try:
+                upstream = branch.tracking_branch()
+                if upstream:
+                    status['has_upstream'] = True
+                    status['upstream_name'] = upstream.name
+                    ahead, behind = self.repo.git.rev_list('--left-right', '--count',
+                        f'{upstream.name}...{branch_name}').split()
+                    status['ahead_count'] = int(ahead)
+                    status['behind_count'] = int(behind)
+            except GitCommandError:
+                pass
+
+            return status
+
+        except (IndexError, GitCommandError) as e:
+            self.console.print(f"[red]Error getting branch status: {e}[/red]")
+            raise
+
+    def is_directory(self, path_spec: str) -> bool:
+        """Check if a path in a specific revision is a directory."""
+        try:
+            # Use git ls-tree to check if it's a directory
+            output = self.repo.git.ls_tree(path_spec.split(':')[0], path_spec.split(':')[1])
+            return output.strip().startswith('040000')
+        except GitCommandError:
+            return False
+
+    def get_tracked_files(self, branch: str, directory: str) -> List[str]:
+        """Get list of tracked files in a directory on a branch."""
+        try:
+            # Use git ls-tree -r to recursively list tracked files
+            output = self.repo.git.ls_tree('-r', '--name-only', branch, directory)
+            return [f for f in output.split('\n') if f.strip()]
+        except GitCommandError:
+            return []
+
+    def show(self, path_spec: str) -> str:
+        """Show file/directory contents at a specific revision."""
+        return self.repo.git.show(path_spec)
+
+    def has_uncommitted_changes(self, path: str) -> bool:
+        """Check if a file or directory has uncommitted changes.
+
+        Args:
+            path: File or directory path to check
+
+        Returns:
+            bool: True if there are uncommitted changes, False otherwise
+        """
+        try:
+            # Use git status --porcelain to get a machine-readable status
+            status = self.repo.git.status('--porcelain', path)
+            return bool(status.strip())
+        except GitCommandError:
+            return False
+
+    def get_file_hash(self, path_spec: str) -> str:
+        """Get the hash of a file in a specific revision.
+
+        Args:
+            path_spec: Path spec like "branch:path/to/file"
+
+        Returns:
+            The Git hash of the file
+        """
+        try:
+            # Use git ls-tree to get the file's hash
+            output = self.repo.git.ls_tree('-r', path_spec.split(':')[0], path_spec.split(':')[1])
+            if output.strip():
+                # Output format: <mode> blob <hash>\t<path>
+                return output.split()[2]
+            return ""
+        except GitCommandError:
+            return ""

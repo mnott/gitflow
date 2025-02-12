@@ -3392,76 +3392,105 @@ def compare(
 #
 @app.command()
 def cp(
-    file_path:      str           = typer.Argument(...,                 help="The path to the file to copy the latest commit for"),
+    file_path:      str           = typer.Argument(...,                 help="The path to the file or directory to copy"),
     target_branches: List[str]    = typer.Argument(None,                help="The target branch(es) to copy into"),
     push:           bool          = typer.Option  (True, "--push",      help="Push the changes to the remote repository after copying"),
     create_pr:      bool          = typer.Option  (False, "-p", "--pr", help="Create a pull request instead of pushing directly")
 ):
     """
-    Copy the latest commit of a specific file from the current branch into one or more target branches.
-
-    Parameters:
-    - file_path     : The path to the file to copy the latest commit for.
-    - target_branches: The target branch(es) to copy into. If not provided, you'll be prompted to select.
-    - push          : Push the changes to the remote repository after copying if the remote branch exists.
-    - create_pr     : Create a pull request instead of pushing directly.
-
-    Examples:
-    - Copy the latest commit of gitflow.py into a feature branch:
-        ./gitflow.py cp gitflow.py feature/new-feature --push
-    - Copy into multiple branches:
-        ./gitflow.py cp gitflow.py feature/branch1 feature/branch2 main
-    - Copy and create pull requests:
-        ./gitflow.py cp gitflow.py main develop --pr
+    Copy files from the current branch into one or more target branches.
     """
     try:
         offline = not git_wrapper.check_network_connection()
-
-        # Save the current branch
         original_branch = git_wrapper.get_current_branch()
 
-        # Read the file content in the current branch
-        try:
-            with open(file_path, 'r') as source_file:
-                current_branch_file_content = source_file.read()
-        except FileNotFoundError:
-            console.print(f"[red]Error: {file_path} not found in the current branch[/red]")
-            return
+        # Check for uncommitted changes
+        if git_wrapper.has_uncommitted_changes(file_path):
+            console.print(f"[yellow]Warning: There are uncommitted changes in {file_path}[/yellow]")
+            console.print("[yellow]Only committed changes will be copied. Commit your changes first if you want to include them.[/yellow]")
 
         # If target_branches is not provided, show a list of branches to select from
         if not target_branches:
-            branches = [head.name for head in git_wrapper.get_heads() if head.name != git_wrapper.get_current_branch()]
+            branches = [head.name for head in git_wrapper.get_heads() if head.name != original_branch]
             target_branches = inquirer.checkbox(
                 message="Select branch(es) to copy into:",
                 choices=branches
             ).execute()
+
+        # Get list of files to copy before switching branches
+        if git_wrapper.is_directory(f"{original_branch}:{file_path}"):
+            files = git_wrapper.get_tracked_files(original_branch, file_path)
+            if not files:
+                console.print(f"[yellow]No tracked files found in {file_path}[/yellow]")
+                return
+            paths_to_copy = files
+        else:
+            paths_to_copy = [file_path]
+
+        # Read all file contents from current branch before switching
+        file_contents = {}
+        for path in paths_to_copy:
+            try:
+                file_contents[path] = git_wrapper.show(f"{original_branch}:{path}")
+            except GitCommandError:
+                console.print(f"[red]Error: {path} not found in {original_branch}[/red]")
+                continue
 
         for target_branch in target_branches:
             # Checkout the target branch
             git_wrapper.checkout(target_branch)
             console.print(f"[green]Switched to branch {target_branch}[/green]")
 
-            # Read the file content in the target branch
-            target_branch_file_content = ""
-            try:
-                with open(file_path, 'r') as target_file:
-                    target_branch_file_content = target_file.read()
-            except FileNotFoundError:
-                pass  # It's okay if the file does not exist in the target branch
+            changes_made = False
+            for path in paths_to_copy:
+                if path not in file_contents:
+                    continue
 
-            # Compare the file contents
-            if current_branch_file_content == target_branch_file_content:
-                console.print(f"[yellow]File {file_path} is identical in {target_branch}. Skipping copy.[/yellow]")
-            else:
+                # Read the file content from the target branch
+                try:
+                    # Get the file's hash in both branches to compare
+                    source_hash = git_wrapper.get_file_hash(f"{original_branch}:{path}")
+                    target_hash = git_wrapper.get_file_hash(f"{target_branch}:{path}")
+
+                    if source_hash == target_hash:
+                        console.print(f"[yellow]File {path} is identical in {target_branch}. Skipping copy.[/yellow]")
+                        continue
+
+                    # Files are different, copy the content
+                    console.print(f"[green]Copying {path} to {target_branch}[/green]")
+                except GitCommandError:
+                    # File doesn't exist in target branch or other error
+                    console.print(f"[green]Adding {path} to {target_branch}[/green]")
+
+                # Create directory if it doesn't exist (but only if there's a directory part)
+                dir_name = os.path.dirname(path)
+                if dir_name:  # Only create directories if path has a directory component
+                    os.makedirs(dir_name, exist_ok=True)
+
                 # Write the content from the current branch into the target branch
-                with open(file_path, 'w') as target_file:
-                    target_file.write(current_branch_file_content)
+                with open(path, 'w') as target_file:
+                    target_file.write(file_contents[path])
 
-                # Commit the change
-                git_wrapper.add(file_path)
-                commit_message = f"Copy latest changes for {file_path} from {original_branch} to {target_branch}"
-                git_wrapper.commit(commit_message)
-                console.print(f"[green]Copied the latest changes for {file_path} into {target_branch}[/green]")
+                try:
+                    # Add the file and check if it actually changed
+                    git_wrapper.add(path)
+                    # Check if the file was actually modified
+                    status = git_wrapper.repo.git.status('--porcelain', path)
+                    if status.strip():
+                        changes_made = True
+                except GitCommandError as e:
+                    console.print(f"[red]Error adding {path}: {e}[/red]")
+                    continue
+
+            if changes_made:
+                # Commit all changes for this branch
+                try:
+                    commit_message = f"Copy latest changes for {file_path} from {original_branch} to {target_branch}"
+                    git_wrapper.commit(commit_message)
+                    console.print(f"[green]Copied the latest changes into {target_branch}[/green]")
+                except GitCommandError as e:
+                    if "nothing to commit" not in str(e):
+                        raise
 
                 # Push changes or create a pull request
                 if push or create_pr:
