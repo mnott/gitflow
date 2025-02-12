@@ -1053,58 +1053,56 @@ def finish(
 #
 @app.command()
 def sync(
+    force: bool = typer.Option(False, "-f", "--force", help="Force sync even with conflicts"),
+    push_changes: bool = typer.Option(True, "--push/--no-push", help="Push changes to remote"),
     remote: str = typer.Option("origin", help="Remote to push to"),
-    push_changes: bool = typer.Option(True, "--push/--no-push", help="Push changes to remote after syncing"),
-    message: Optional[str] = typer.Option(None, "-m", "--message", help="Commit message for the merge commit"),
-    body: Optional[str] = typer.Option(None, "-b", "--body", help="Commit message body"),
-    force: bool = typer.Option(False, "-f", "--force", help="Force push changes")
+    message: Optional[str] = typer.Option(None, "-m", "--message", help="Custom merge message"),
+    body: Optional[str] = typer.Option(None, "-b", "--body", help="Custom merge message body")
 ):
-    """
-    Synchronize main branch with develop.
-
-    This is a shortcut for syncing main with develop without creating a release.
-    The command will merge develop into main and return you to your original branch.
-
-    Examples:
-        gf sync  # Sync main with develop and push
-        gf sync --no-push  # Sync without pushing
-        gf sync -m "Sync main with develop" # Custom merge message
-        gf sync -f  # Force push if needed
-    """
+    """Sync current branch with remote and merge develop into main."""
     try:
-        # Store original branch
+        # Save current branch
         original_branch = git_wrapper.get_current_branch()
 
-        # First ensure we're on develop
-        if original_branch != 'develop':
-            git_wrapper.checkout('develop')
-
-        # Push develop if requested
+        # Push current branch if requested
         if push_changes:
-            push(remote=remote, branch='develop', force=force, message=message, body=body)
+            git_wrapper.push_to_remote(original_branch)
+            console.print(f"[green]Successfully pushed to {remote}/{original_branch}[/green]")
 
-        # Then merge develop into main
-        git_wrapper.checkout('main')
-        if message:
-            git_wrapper.merge('develop', no_ff=True, message=message, body=body)
-        else:
-            git_wrapper.merge('develop', no_ff=True)
-        console.print("[green]Merged develop into main[/green]")
+        # Only try to merge into main if we're on develop
+        if original_branch == 'develop':
+            # Switch to main
+            git_wrapper.checkout('main')
 
-        # Push main if requested
-        if push_changes:
-            push(remote=remote, branch='main', force=force, message=message, body=body)
+            try:
+                # Try to merge develop into main
+                if message:
+                    git_wrapper.merge('develop', no_ff=True, message=message, body=body)
+                else:
+                    git_wrapper.merge('develop', no_ff=True)
+                console.print("[green]Merged develop into main[/green]")
 
-        # Return to original branch unless we're already there
-        if original_branch != git_wrapper.get_current_branch():
+                # Push main if requested
+                if push_changes:
+                    git_wrapper.push_to_remote('main')
+                    console.print(f"[green]Successfully pushed to {remote}/main[/green]")
+
+            except GitCommandError as e:
+                if "CONFLICT" in str(e):
+                    console.print("[red]Merge conflict detected![/red]")
+                    console.print("[yellow]Please resolve conflicts and then run:[/yellow]")
+                    console.print("  1. git add <resolved-files>")
+                    console.print("  2. git commit")
+                    console.print("  3. git push")
+                    return 1
+                raise
+
+            # Return to original branch
             git_wrapper.checkout(original_branch)
             console.print(f"[green]Returned to {original_branch}[/green]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
-        # Try to return to original branch on error
-        if original_branch != git_wrapper.get_current_branch():
-            git_wrapper.checkout(original_branch)
         return 1
 
     return 0
@@ -3448,18 +3446,19 @@ def cp(
 
                 # Read the file content from the target branch
                 try:
-                    # Get the file's hash in both branches to compare
-                    source_hash = git_wrapper.get_file_hash(f"{original_branch}:{path}")
-                    target_hash = git_wrapper.get_file_hash(f"{target_branch}:{path}")
+                    # First check if file exists and is identical in working directory
+                    try:
+                        with open(path, 'r') as f:
+                            current_content = f.read()
+                            if current_content == file_contents[path]:
+                                console.print(f"[yellow]File {path} is identical in {target_branch}. Skipping copy.[/yellow]")
+                                continue
+                    except FileNotFoundError:
+                        pass  # File doesn't exist yet, will be added
 
-                    if source_hash == target_hash:
-                        console.print(f"[yellow]File {path} is identical in {target_branch}. Skipping copy.[/yellow]")
-                        continue
-
-                    # Files are different, copy the content
+                    # If file doesn't exist or is different, copy it
                     console.print(f"[green]Copying {path} to {target_branch}[/green]")
                 except GitCommandError:
-                    # File doesn't exist in target branch or other error
                     console.print(f"[green]Adding {path} to {target_branch}[/green]")
 
                 # Create directory if it doesn't exist (but only if there's a directory part)
