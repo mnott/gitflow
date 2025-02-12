@@ -342,15 +342,6 @@ followed by a prompt that you specify, will refine the explanations further.
 Alternatively, you can also just get a summary of what the file does by adding
 the `--summary` option.
 
-
-## Document the script
-
-To re-create the documentation and write it to the output file, run:
-
-```bash
-./gitflow.py doc
-```
-
 ## Issue Operations
 
 Github lacks the ability to clone issues. Hence here two commands that can come
@@ -362,205 +353,90 @@ in handy:
 ./gitflow.py clone-issue 245 -A --title "New Issue Title"
 ```
 
-
-### List Issues
-
-```bash
-./gitflow.py list-issues
-```
-
-
-## Worktree Operations
-
-Git worktrees allow you to have multiple working directories connected to the same repository.
-This is useful for working on multiple branches simultaneously without constantly switching.
-
-Imagine you're working on a big feature in feature/dashboard5 and suddenly your team reports
-a critical bug in production that needs immediate attention. Without worktrees, you'd need to:
-
-1. Stash or commit your half-done dashboard work
-2. Switch to the hotfix branch
-3. Fix the bug
-4. Switch back to your feature
-5. Remember where you were with your work
-
-With worktrees, instead you can:
-
-1. Keep your dashboard work exactly as is in your worktree
-2. In your main repository, create and checkout a hotfix branch
-3. Fix the bug
-4. Submit the fix
-5. Return to your dashboard work in the worktree - everything is exactly as you left it
-
-Another common use case is when you need to run two versions of your code simultaneously -
-like comparing how your app behaves before and after your changes, or running tests on
-two different branches at once.
-
-But if you're not encountering these scenarios, and branch switching isn't causing you pain,
-then worktrees might be adding unnecessary complexity to your workflow. Git worktrees are a
-power tool - helpful in specific situations but not something everyone needs for daily work.
-
-Worktrees are best used as a temporary solution for specific situations, not as your
-default way of working. Here's a sensible approach:
-
-Do most of your daily work in your main repository directory, using normal branch switching
-Create a worktree only when you have a specific need, like:
-
-- When you need to work on an urgent fix while keeping your current work intact
-- When you need to run two versions of your code side by side
-- When you're reviewing a complex PR and want to run it alongside your current work
-
-Then, once you're done with that specific task, you can remove the worktree and go back
-to your normal workflow. Think of worktrees like a spare workbench - you don't need it
-for every task, but it's very helpful when you need to work on two things
-at once without mixing them up.
-
-### Create a Worktree
-
-To create a new worktree for an existing branch or create a new branch on the fly:
+### List and Manage Issues
 
 ```bash
-./gitflow.py worktree add feature/test ../tc-worktrees/dashboard5
+# List all issues matching a pattern
+gf manage-issues -l --search "Manual Imports" --regex
+
+# List only open issues matching a pattern
+gf manage-issues -l --search "Manual Imports" -c open --regex
+
+# Close all open issues matching a pattern
+gf manage-issues --search "Manual Imports: CW3\d" -s closed -c open --regex
+
+# Open all closed issues matching a pattern
+gf manage-issues --search "Manual Imports: CW0[1-3]" -s open -c closed --regex
+
+# Rename issues (with preview)
+gf manage-issues --search "Manual Imports : CW" --rename "Manual Imports: CW" --regex-rename --dry-run
+
+# Actually perform the rename
+gf manage-issues --search "Manual Imports : CW" --rename "Manual Imports: CW" --regex-rename
+
+# Use regex groups in rename
+gf manage-issues --search "Manual Imports: CW(\d)\b" --rename "Manual Imports: CW0\1" --regex-rename
 ```
 
+The regex patterns follow Python's re module syntax. Some useful patterns:
+- `\d` matches any digit
+- `\b` matches a word boundary
+- `[0-9]` matches any digit
+- `[1-3]` matches digits 1 through 3
+- `(\d)` captures a digit into group 1, referenced as `\1` in replace pattern
+- `.*` matches any characters
+- `^` matches start of line
+- `$` matches end of line
 
-### Switch Between Worktrees
-
-For this to work, it makes sense to have this in your `~/.bashrc` or `~/.zshrc`:
+### Manage Labels
 
 ```bash
-# Git worktree navigation
-function cdworktree() {
-    local branch="$1"
-    if [[ -z "$branch" ]]; then
-        echo "Usage: cdworktree <branch-name>"
-        return 1
-    fi
+# List all repository labels
+gf manage-labels --list
 
-    # Get all output first to avoid multiple calls
-    local all_output=$(gf ls --format plain 2>/dev/null)
+# Preview creating new labels
+gf manage-labels -c "bug:ff0000:Bug reports" -c "feature:00ff00" --dry-run
 
-    # First try to find a worktree for the requested branch
-    local line=$(echo "$all_output" | grep -F "$branch" | head -n1)
-    local worktree_path=$(echo "$line" | grep -o '<[^>]*>' | sed 's/^<\(.*\)>$/\1/')
+# Create new labels
+gf manage-labels -c "bug:ff0000:Bug reports" -c "feature:00ff00"
 
-    if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
-        cd "$worktree_path"
-        return
-    fi
+# Preview renaming a label
+gf manage-labels --rename "old-name:new-name" --dry-run
 
-    # If no worktree found for the branch, try to find the main repository
-    # Look for the current branch's worktree
-    local current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-    local main_repo=$(echo "$all_output" | grep -F "$current_branch" | grep -o '<[^>]*>' | sed 's/^<\(.*\)>$/\1/')
+# Rename a label
+gf manage-labels --rename "old-name:new-name"
 
-    # Verify the branch exists
-    if git rev-parse --verify "$branch" >/dev/null 2>&1; then
-        if [[ -n "$main_repo" && -d "$main_repo" ]]; then
-            if [[ "$PWD" != "$main_repo" ]]; then
-                cd "$main_repo"
-                echo "Note: '$branch' is not in a worktree, changing to main repository at $main_repo"
-            fi
-        else
-            echo "Could not determine main repository location"
-            return 1
-        fi
-    else
-        echo "No worktree or branch found for '$branch'"
-        return 1
-    fi
-}
+# Preview deleting labels
+gf manage-labels --delete old-label --dry-run
+
+# Delete labels
+gf manage-labels --delete old-label
+
+# Preview adding/removing labels for matching issues
+gf manage-labels --search "Manual Imports" --regex -r old-label -a new-label --dry-run
+
+# Add/remove labels for matching issues
+gf manage-labels --search "Manual Imports" --regex -r old-label -a new-label
 ```
 
-To switch to an existing worktree's directory:
+The regex patterns follow Python's re module syntax. Some useful patterns:
+- `\d` matches any digit
+- `\b` matches a word boundary
+- `[0-9]` matches any digit
+- `[1-3]` matches digits 1 through 3
+- `(\d)` captures a digit into group 1, referenced as `\1` in replace pattern
+- `.*` matches any characters
+- `^` matches start of line
+- `$` matches end of line
+
+
+## Document the script
+
+To re-create the documentation and write it to the output file, run:
 
 ```bash
-cdworktree feature/test
+./gitflow.py doc
 ```
-
-### List Worktrees
-
-To list all worktrees and their locations:
-
-```bash
-./gitflow.py worktree ls
-```
-
-### Remove a Worktree
-
-To safely remove a worktree and clean up its branch:
-
-```bash
-./gitflow.py worktree rm feature/test
-```
-
-### Sample Workflow
-
-First, we create a new worktree for the feature branch (if
-the branch already exists, it will be added to that worktree):
-
-```bash
-./gitflow.py worktree add feature/test ../tc-worktrees/test
-```
-
-Then, we cd into the worktree and start working on the feature:
-
-```bash
-cdworktree feature/test
-```
-
-When we are finished, we can finish the branch right
-from here, or we can push the branch to the remote.
-
-One way to finish the branch is to run:
-
-```bash
-./gitflow.py worktree finish
-```
-
-You will then typically get this message:
-
-```
-Pushed changes to feature/test
-Removed worktree at ..../test
-
-Note: Current directory no longer exists.
-Please run:
-1. cd ..../test
-2. gf checkout feature/test
-3. gf finish
-```
-
-That means we need to go back to the main repository and
-checkout the branch again:
-
-```bash
-cd ..../test
-./gitflow.py checkout feature/test
-```
-
-Then we can finish the branch:
-
-```bash
-./gitflow.py finish
-```
-
-
-We could at some point also just decide to remove the
-worktree:
-
-```bash
-./gitflow.py worktree rm feature/test
-```
-
-Note that if you finish or remove a worktree while you are
-in it, you will not be moved back to the main repository, but
-you will be shown a message to that effect.
-
-
-# License
-
-This script is released under the [WTFPL License](https://en.wikipedia.org/wiki/WTFPL).
 
 """
 
@@ -4193,6 +4069,450 @@ def comment(
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
+
+
+#
+# Issue commands
+#
+@app.command()
+def manage_issues(
+    search:        Optional[str] = typer.Option(None,        "--search",       help="Search issues by title (supports regex)"),
+    regex:                  bool = typer.Option(False, "-R", "--regex",       help="Use regex for searching"),
+    state:                  str  = typer.Option(None,  "-s", "--state",       help="Set issue state (open/closed)"),
+    current_state:          str  = typer.Option(None,  "-c", "--current-state", help="Only match issues in this state (open/closed)"),
+    rename:         Optional[str] = typer.Option(None,       "--rename",      help="Rename matching issues (format: search:replace)"),
+    regex_rename:           bool = typer.Option(False,       "--regex-rename", help="Use regex for renaming"),
+    dry_run:               bool = typer.Option(False, "-d", "--dry-run",     help="Show what would be done without making changes"),
+    list_only:             bool = typer.Option(False, "-l", "--list",        help="Only list matching issues without modifying"),
+    limit:                  int  = typer.Option(10000,       "--limit",       help="Maximum number of issues to process"),
+):
+    r"""
+    Manage GitHub issues - list, open, close, or rename issues matching a search pattern.
+
+    Examples:
+    - List issues matching a pattern:
+        gf manage-issues --search "Cleanup Rules" --list
+
+    - Close all open issues matching a pattern:
+        gf manage-issues --search "Cleanup Rules" -s closed -c open
+
+    - Open all closed issues matching a regex:
+        gf manage-issues --search "^PROJ-\d+" --regex -s open -c closed
+
+    - Rename issues (replace text):
+        gf manage-issues --search "Manual Imports:" --rename "Manual Imports : "
+
+    - Rename issues using regex:
+        gf manage-issues --search "Manual Imports" --rename "CW(\d+):CW0\1" --regex-rename
+
+    - Preview renaming without making changes:
+        gf manage-issues --search "Manual Imports" --rename "CW(\d+):CW0\1" --regex-rename --dry-run
+    """
+    try:
+        # Get all issues and filter by search
+        cmd = ["gh", "issue", "list",
+               "--json", "number,title,labels,state",
+               "--state", "all",
+               "--limit", "10000"]  # Increased limit significantly
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        issues = json.loads(result.stdout)
+
+        # Respect the user's limit if specified
+        if limit and len(issues) > limit:
+            issues = issues[:limit]
+
+        # Filter issues by title using regex or plain text
+        try:
+            if regex:
+                pattern = re.compile(search, re.IGNORECASE)
+            else:
+                pattern = re.compile(re.escape(search), re.IGNORECASE)
+
+            filtered_issues = [issue for issue in issues
+                     if pattern.search(issue['title'])]
+
+            # Filter by current state if specified
+            if current_state:
+                current_state = current_state.upper()
+                filtered_issues = [issue for issue in filtered_issues
+                         if issue['state'].upper() == current_state]
+
+        except re.error as e:
+            console.print(f"[red]Invalid regex pattern: {e}[/red]")
+            return
+
+        if not filtered_issues:
+            console.print("[yellow]No matching issues found[/yellow]")
+            return
+
+        # Handle renaming first if specified
+        if rename:
+            table = Table(title="Preview of Issue Renaming")
+            table.add_column("Number", style="cyan")
+            table.add_column("Current Title", style="yellow")
+            table.add_column("New Title", style="green")
+
+            changes_found = False
+            for issue in filtered_issues:
+                current_title = issue['title']
+                if regex_rename:
+                    try:
+                        new_title = re.sub(search, rename, current_title)
+                    except re.error as e:
+                        console.print(f"[red]Invalid regex pattern: {e}[/red]")
+                        return
+                else:
+                    new_title = current_title.replace(search, rename)
+
+                if new_title != current_title:
+                    changes_found = True
+                    table.add_row(
+                        f"#{issue['number']}",
+                        current_title,
+                        new_title
+                    )
+
+            if changes_found:
+                console.print(table)
+                if dry_run:
+                    console.print("\n[yellow]This was a dry run. No changes were made.[/yellow]")
+                    return
+
+                # Confirm before modifying issues
+                if not inquirer.confirm(
+                    message=f"Are you sure you want to rename these issues?",
+                    default=False
+                ).execute():
+                    console.print("[yellow]Operation cancelled.[/yellow]")
+                    return
+
+                # Perform the renaming
+                for issue in filtered_issues:
+                    try:
+                        current_title = issue['title']
+                        if regex_rename:
+                            new_title = re.sub(search, rename, current_title)
+                        else:
+                            new_title = current_title.replace(search, rename)
+
+                        if new_title != current_title:
+                            cmd = ["gh", "issue", "edit", str(issue['number']), "--title", new_title]
+                            subprocess.run(cmd, check=True, capture_output=True)
+                            console.print(f"[green]Renamed issue #{issue['number']}:[/green] {current_title} -> {new_title}")
+                    except subprocess.CalledProcessError as e:
+                        console.print(f"[red]Error renaming issue #{issue['number']}: {e.stderr}[/red]")
+            else:
+                console.print("[yellow]No changes would be made with this pattern.[/yellow]")
+            return
+
+        # Display matching issues (only if not renaming)
+        table = Table(title=f"Matching Issues")
+        table.add_column("Number", style="cyan")
+        table.add_column("Title")
+        table.add_column("Labels", style="magenta")
+        table.add_column("State", style="green")
+
+        for issue in filtered_issues:
+            table.add_row(
+                f"#{issue['number']}",
+                issue['title'],
+                ", ".join(label['name'] for label in issue['labels']),
+                issue['state']
+            )
+
+        console.print(table)
+        console.print(f"\nTotal issues found: {len(filtered_issues)}")
+
+        # If only listing or no state change requested, return here
+        if list_only or not state:
+            return
+
+        # Validate state transition
+        if current_state and current_state.upper() == state.upper():
+            console.print(f"[yellow]Issues are already in {state} state[/yellow]")
+            return
+
+        # Confirm before modifying issues
+        if not inquirer.confirm(
+            message=f"Are you sure you want to {state} {len(filtered_issues)} issues?",
+            default=False
+        ).execute():
+            console.print("[yellow]Operation cancelled.[/yellow]")
+            return
+
+        # Update issue states
+        for issue in filtered_issues:
+            try:
+                if state.lower() == 'closed':
+                    cmd = ["gh", "issue", "close", str(issue['number'])]
+                else:
+                    cmd = ["gh", "issue", "reopen", str(issue['number'])]
+                subprocess.run(cmd, check=True, capture_output=True)
+            except subprocess.CalledProcessError as e:
+                console.print(f"[red]Error updating issue #{issue['number']}: {e.stderr}[/red]")
+
+        console.print(f"[green]Successfully {state}d {len(filtered_issues)} issues[/green]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {str(e)}[/red]")
+
+
+#
+# Label commands
+#
+@app.command()
+def manage_labels(
+    labels:           List[str] = typer.Option(None, "-l",  "--label",  help="Labels to filter/modify issues"),
+    add_labels:       List[str] = typer.Option(None, "-a",  "--add",    help="Labels to add to matching issues"),
+    remove_labels:    List[str] = typer.Option(None, "-r",  "--remove", help="Labels to remove from matching issues"),
+    rename:      Optional[str]  = typer.Option(None,       "--rename", help="Rename a label (format: old_name:new_name)"),
+    create:           List[str] = typer.Option(None, "-c",  "--create", help="Create new labels (format: name:color[:description])"),
+    delete:           List[str] = typer.Option(None,       "--delete", help="Delete labels"),
+    list_labels:           bool = typer.Option(False,       "--list",   help="List all repository labels"),
+    state:                 str  = typer.Option("all", "-s", "--state",  help="Issue state to filter by (open/closed/all)"),
+    search:       Optional[str] = typer.Option(None,        "--search", help="Search issues by title (supports regex)"),
+    regex:                 bool = typer.Option(False, "-R", "--regex",  help="Use regex for searching"),
+    dry_run:              bool = typer.Option(False, "-d", "--dry-run", help="Show what would be done without making changes"),
+):
+    r"""
+    Manage GitHub issue labels - list, create, add, remove, or rename labels.
+
+    Examples:
+    - List all repository labels:
+        gf manage-labels --list
+
+    - Create new labels (with preview):
+        gf manage-labels -c "bug:ff0000:Bug reports" -c "feature:00ff00" --dry-run
+
+    - Rename a label (with preview):
+        gf manage-labels --rename "old-name:new-name" --dry-run
+
+    - Delete labels (with preview):
+        gf manage-labels --delete old-label --dry-run
+
+    - Preview label changes for matching issues:
+        gf manage-labels --search "Manual Imports" --regex -r old-label -a new-label --dry-run
+
+    - Apply label changes to matching issues:
+        gf manage-labels --search "Manual Imports" --regex -r old-label -a new-label
+
+    All operations support:
+    - Previewing changes with --dry-run
+    - Regex search patterns with --regex
+    - Before/after preview tables
+    - Confirmation prompts
+    - Progress feedback
+    """
+    try:
+        git = GitWrapper()
+
+        # List all labels
+        if list_labels:
+            labels_data = git.get_repo_labels()
+            table = Table(title="Repository Labels")
+            table.add_column("Name", style="cyan")
+            table.add_column("Color", style="magenta")
+            table.add_column("Description")
+
+            for label in labels_data:
+                table.add_row(
+                    label['name'],
+                    f"#{label['color']}",
+                    label.get('description', '')
+                )
+
+            console.print(table)
+            return
+
+        # Create new labels
+        if create:
+            # First show preview
+            table = Table(title="Label Creation Preview")
+            table.add_column("Name", style="cyan")
+            table.add_column("Color", style="magenta")
+            table.add_column("Description", style="green")
+
+            labels_to_create = []  # Store parsed labels
+            for label_spec in create:
+                parts = label_spec.split(':', 2)
+                name = parts[0]
+                color = parts[1] if len(parts) > 1 else "cccccc"
+                description = parts[2] if len(parts) > 2 else ""
+
+                labels_to_create.append((name, color, description))
+                table.add_row(name, f"#{color}", description)
+
+            console.print(table)
+            if dry_run:
+                console.print("\n[yellow]This was a dry run. No labels were created.[/yellow]")
+                return
+
+            if not inquirer.confirm(
+                message=f"Are you sure you want to create these labels?",
+                default=False
+            ).execute():
+                console.print("[yellow]Operation cancelled.[/yellow]")
+                return
+
+            # Then create the labels using stored data
+            for name, color, description in labels_to_create:
+                git.create_label(name, color, description)
+                console.print(f"[green]Created label '{name}'[/green]")
+
+        # Get issues either by labels or search
+        issues = []
+        if labels:
+            issues = git.list_issues_by_label(labels, state)
+        elif search:
+            # Get all issues and filter by search
+            cmd = ["gh", "issue", "list",
+                  "--json", "number,title,labels,state",
+                  "--state", state,
+                  "--limit", "10000"]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            all_issues = json.loads(result.stdout)
+
+            # Filter issues by title using regex or plain text
+            try:
+                if regex:
+                    pattern = re.compile(search, re.IGNORECASE)
+                else:
+                    pattern = re.compile(re.escape(search), re.IGNORECASE)
+
+                issues = [issue for issue in all_issues
+                         if pattern.search(issue['title'])]
+            except re.error as e:
+                console.print(f"[red]Invalid regex pattern: {e}[/red]")
+                return
+
+        if issues:
+            if add_labels or remove_labels:
+                # Show preview of label changes
+                table = Table(title="Label Changes Preview")
+                table.add_column("Number", style="cyan")
+                table.add_column("Title")
+                table.add_column("Current Labels", style="yellow")
+                table.add_column("New Labels", style="green")
+
+                for issue in issues:
+                    current_labels = {label['name'] for label in issue['labels']}
+                    new_labels = current_labels.copy()
+
+                    if add_labels:
+                        new_labels.update(add_labels)
+                    if remove_labels:
+                        new_labels.difference_update(remove_labels)
+
+                    if new_labels != current_labels:
+                        table.add_row(
+                            f"#{issue['number']}",
+                            issue['title'],
+                            ", ".join(sorted(current_labels)),
+                            ", ".join(sorted(new_labels))
+                        )
+
+                console.print(table)
+                if dry_run:
+                    console.print("\n[yellow]This was a dry run. No labels were modified.[/yellow]")
+                    return
+
+                if not inquirer.confirm(
+                    message=f"Are you sure you want to modify labels for these issues?",
+                    default=False
+                ).execute():
+                    console.print("[yellow]Operation cancelled.[/yellow]")
+                    return
+
+                # Perform the label modifications
+                for issue in issues:
+                    if add_labels:
+                        git.add_labels_to_issue(issue['number'], add_labels)
+                    if remove_labels:
+                        git.remove_labels_from_issue(issue['number'], remove_labels)
+                    console.print(f"[green]Updated labels for issue #{issue['number']}[/green]")
+
+            else:
+                # Just display the matching issues
+                table = Table(title=f"Matching Issues")
+                table.add_column("Number", style="cyan")
+                table.add_column("Title")
+                table.add_column("Labels", style="magenta")
+                table.add_column("State", style="green")
+
+                for issue in issues:
+                    table.add_row(
+                        f"#{issue['number']}",
+                        issue['title'],
+                        ", ".join(label['name'] for label in issue['labels']),
+                        issue['state']
+                    )
+
+                console.print(table)
+                console.print(f"\nTotal issues found: {len(issues)}")
+
+        else:
+            console.print("[yellow]No matching issues found[/yellow]")
+
+        # Handle label rename
+        if rename:
+            old_name, new_name = rename.split(':', 1)
+            # Show preview
+            table = Table(title="Label Rename Preview")
+            table.add_column("Current Name", style="yellow")
+            table.add_column("New Name", style="green")
+            table.add_row(old_name, new_name)
+
+            console.print(table)
+            if dry_run:
+                console.print("\n[yellow]This was a dry run. No labels were renamed.[/yellow]")
+                return
+
+            if not inquirer.confirm(
+                message=f"Are you sure you want to rename label '{old_name}' to '{new_name}'?",
+                default=False
+            ).execute():
+                console.print("[yellow]Operation cancelled.[/yellow]")
+                return
+
+            git.rename_label(old_name, new_name)
+            console.print(f"[green]Renamed label '{old_name}' to '{new_name}'[/green]")
+            return
+
+        # Handle label deletion
+        if delete:
+            table = Table(title="Label Deletion Preview")
+            table.add_column("Label", style="red")
+            table.add_column("Description", style="yellow")
+
+            labels_data = git.get_repo_labels()
+            labels_to_delete = []
+            for label_name in delete:
+                for label in labels_data:
+                    if label['name'] == label_name:
+                        labels_to_delete.append(label)
+                        table.add_row(label['name'], label.get('description', ''))
+                        break
+
+            console.print(table)
+            if dry_run:
+                console.print("\n[yellow]This was a dry run. No labels were deleted.[/yellow]")
+                return
+
+            if not inquirer.confirm(
+                message=f"Are you sure you want to delete these labels?",
+                default=False
+            ).execute():
+                console.print("[yellow]Operation cancelled.[/yellow]")
+                return
+
+            for label in labels_to_delete:
+                git.delete_label(label['name'])
+                console.print(f"[green]Deleted label '{label['name']}'[/green]")
+            return
+
+    except Exception as e:
+        console.print(f"[red]Error: {str(e)}[/red]")
+
 
 
 #
