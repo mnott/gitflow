@@ -434,6 +434,10 @@ class GitWrapper:
                 merge_args.append('--no-ff')
             self.repo.git.merge(*merge_args)
             new_branch = self.push('origin', target)
+
+            # Don't delete the branch here - let the calling code handle deletion
+            # after all merges are complete
+
             if new_branch:
                 self.console.print(f"[green]Pull request created to merge {source} into {target}[/green]")
             else:

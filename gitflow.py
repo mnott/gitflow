@@ -913,7 +913,7 @@ def finish(
 
         if merge_successful:
             if delete and not keep_local:
-                git_wrapper.delete_branch(current_branch)  # This will delete both local and remote
+                git_wrapper.delete_branch(current_branch, delete_remote=True, delete_local=True)  # Explicitly delete both
                 git_wrapper.cleanup_temp_branches()  # This will only delete local temp branches
             elif keep_local:
                 console.print(f"[yellow]Keeping local branch {current_branch} as requested.[/yellow]")
