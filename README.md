@@ -1,4 +1,4 @@
-# gf
+# gitflow
 
 # Gitflow: A Git Wrapper for Release and Branch Management
 
@@ -340,15 +340,6 @@ followed by a prompt that you specify, will refine the explanations further.
 Alternatively, you can also just get a summary of what the file does by adding
 the `--summary` option.
 
-
-## Document the script
-
-To re-create the documentation and write it to the output file, run:
-
-```bash
-./gitflow.py doc
-```
-
 ## Issue Operations
 
 Github lacks the ability to clone issues. Hence here two commands that can come
@@ -360,204 +351,89 @@ in handy:
 ./gitflow.py clone-issue 245 -A --title "New Issue Title"
 ```
 
-
-### List Issues
-
-```bash
-./gitflow.py list-issues
-```
-
-
-## Worktree Operations
-
-Git worktrees allow you to have multiple working directories connected to the same repository.
-This is useful for working on multiple branches simultaneously without constantly switching.
-
-Imagine you're working on a big feature in feature/dashboard5 and suddenly your team reports
-a critical bug in production that needs immediate attention. Without worktrees, you'd need to:
-
-1. Stash or commit your half-done dashboard work
-2. Switch to the hotfix branch
-3. Fix the bug
-4. Switch back to your feature
-5. Remember where you were with your work
-
-With worktrees, instead you can:
-
-1. Keep your dashboard work exactly as is in your worktree
-2. In your main repository, create and checkout a hotfix branch
-3. Fix the bug
-4. Submit the fix
-5. Return to your dashboard work in the worktree - everything is exactly as you left it
-
-Another common use case is when you need to run two versions of your code simultaneously -
-like comparing how your app behaves before and after your changes, or running tests on
-two different branches at once.
-
-But if you're not encountering these scenarios, and branch switching isn't causing you pain,
-then worktrees might be adding unnecessary complexity to your workflow. Git worktrees are a
-power tool - helpful in specific situations but not something everyone needs for daily work.
-
-Worktrees are best used as a temporary solution for specific situations, not as your
-default way of working. Here's a sensible approach:
-
-Do most of your daily work in your main repository directory, using normal branch switching
-Create a worktree only when you have a specific need, like:
-
-- When you need to work on an urgent fix while keeping your current work intact
-- When you need to run two versions of your code side by side
-- When you're reviewing a complex PR and want to run it alongside your current work
-
-Then, once you're done with that specific task, you can remove the worktree and go back
-to your normal workflow. Think of worktrees like a spare workbench - you don't need it
-for every task, but it's very helpful when you need to work on two things
-at once without mixing them up.
-
-### Create a Worktree
-
-To create a new worktree for an existing branch or create a new branch on the fly:
+### List and Manage Issues
 
 ```bash
-./gitflow.py worktree add feature/test ../tc-worktrees/dashboard5
+# List all issues matching a pattern
+gf manage-issues -l --search "Manual Imports" --regex
+
+# List only open issues matching a pattern
+gf manage-issues -l --search "Manual Imports" -c open --regex
+
+# Close all open issues matching a pattern
+gf manage-issues --search "Manual Imports: CW3\d" -s closed -c open --regex
+
+# Open all closed issues matching a pattern
+gf manage-issues --search "Manual Imports: CW0[1-3]" -s open -c closed --regex
+
+# Rename issues (with preview)
+gf manage-issues --search "Manual Imports : CW" --rename "Manual Imports: CW" --regex-rename --dry-run
+
+# Actually perform the rename
+gf manage-issues --search "Manual Imports : CW" --rename "Manual Imports: CW" --regex-rename
+
+# Use regex groups in rename
+gf manage-issues --search "Manual Imports: CW(\d)\b" --rename "Manual Imports: CW0\1" --regex-rename
 ```
 
+The regex patterns follow Python's re module syntax. Some useful patterns:
+- `\d` matches any digit
+- `\b` matches a word boundary
+- `[0-9]` matches any digit
+- `[1-3]` matches digits 1 through 3
+- `(\d)` captures a digit into group 1, referenced as `\1` in replace pattern
+- `.*` matches any characters
+- `^` matches start of line
+- `$` matches end of line
 
-### Switch Between Worktrees
-
-For this to work, it makes sense to have this in your `~/.bashrc` or `~/.zshrc`:
+### Manage Labels
 
 ```bash
-# Git worktree navigation
-function cdworktree() {
-    local branch="$1"
-    if [[ -z "$branch" ]]; then
-        echo "Usage: cdworktree <branch-name>"
-        return 1
-    fi
+# List all repository labels
+gf manage-labels --list
 
-    # Get all output first to avoid multiple calls
-    local all_output=$(gf ls --format plain 2>/dev/null)
+# Preview creating new labels
+gf manage-labels -c "bug:ff0000:Bug reports" -c "feature:00ff00" --dry-run
 
-    # First try to find a worktree for the requested branch
-    local line=$(echo "$all_output" | grep -F "$branch" | head -n1)
-    local worktree_path=$(echo "$line" | grep -o '<[^>]*>' | sed 's/^<\(.*\)>$/\1/')
+# Create new labels
+gf manage-labels -c "bug:ff0000:Bug reports" -c "feature:00ff00"
 
-    if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
-        cd "$worktree_path"
-        return
-    fi
+# Preview renaming a label
+gf manage-labels --rename "old-name:new-name" --dry-run
 
-    # If no worktree found for the branch, try to find the main repository
-    # Look for the current branch's worktree
-    local current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-    local main_repo=$(echo "$all_output" | grep -F "$current_branch" | grep -o '<[^>]*>' | sed 's/^<\(.*\)>$/\1/')
+# Rename a label
+gf manage-labels --rename "old-name:new-name"
 
-    # Verify the branch exists
-    if git rev-parse --verify "$branch" >/dev/null 2>&1; then
-        if [[ -n "$main_repo" && -d "$main_repo" ]]; then
-            if [[ "$PWD" != "$main_repo" ]]; then
-                cd "$main_repo"
-                echo "Note: '$branch' is not in a worktree, changing to main repository at $main_repo"
-            fi
-        else
-            echo "Could not determine main repository location"
-            return 1
-        fi
-    else
-        echo "No worktree or branch found for '$branch'"
-        return 1
-    fi
-}
+# Preview deleting labels
+gf manage-labels --delete old-label --dry-run
+
+# Delete labels
+gf manage-labels --delete old-label
+
+# Preview adding/removing labels for matching issues
+gf manage-labels --search "Manual Imports" --regex -r old-label -a new-label --dry-run
+
+# Add/remove labels for matching issues
+gf manage-labels --search "Manual Imports" --regex -r old-label -a new-label
 ```
 
-To switch to an existing worktree's directory:
+The regex patterns follow Python's re module syntax. Some useful patterns:
+- `\d` matches any digit
+- `\b` matches a word boundary
+- `[0-9]` matches any digit
+- `[1-3]` matches digits 1 through 3
+- `(\d)` captures a digit into group 1, referenced as `\1` in replace pattern
+- `.*` matches any characters
+- `^` matches start of line
+- `$` matches end of line
+
+
+## Document the script
+
+To re-create the documentation and write it to the output file, run:
 
 ```bash
-cdworktree feature/test
+./gitflow.py doc
 ```
-
-### List Worktrees
-
-To list all worktrees and their locations:
-
-```bash
-./gitflow.py worktree ls
-```
-
-### Remove a Worktree
-
-To safely remove a worktree and clean up its branch:
-
-```bash
-./gitflow.py worktree rm feature/test
-```
-
-### Sample Workflow
-
-First, we create a new worktree for the feature branch (if
-the branch already exists, it will be added to that worktree):
-
-```bash
-./gitflow.py worktree add feature/test ../tc-worktrees/test
-```
-
-Then, we cd into the worktree and start working on the feature:
-
-```bash
-cdworktree feature/test
-```
-
-When we are finished, we can finish the branch right
-from here, or we can push the branch to the remote.
-
-One way to finish the branch is to run:
-
-```bash
-./gitflow.py worktree finish
-```
-
-You will then typically get this message:
-
-```
-Pushed changes to feature/test
-Removed worktree at ..../test
-
-Note: Current directory no longer exists.
-Please run:
-1. cd ..../test
-2. gf checkout feature/test
-3. gf finish
-```
-
-That means we need to go back to the main repository and
-checkout the branch again:
-
-```bash
-cd ..../test
-./gitflow.py checkout feature/test
-```
-
-Then we can finish the branch:
-
-```bash
-./gitflow.py finish
-```
-
-
-We could at some point also just decide to remove the
-worktree:
-
-```bash
-./gitflow.py worktree rm feature/test
-```
-
-Note that if you finish or remove a worktree while you are
-in it, you will not be moved back to the main repository, but
-you will be shown a message to that effect.
-
-
-# License
-
-This script is released under the [WTFPL License](https://en.wikipedia.org/wiki/WTFPL).
 
 

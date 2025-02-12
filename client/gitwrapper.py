@@ -6,6 +6,7 @@ from rich.console import Console
 from typing import Optional, Dict, List
 import subprocess
 import sys
+import json
 
 class GitWrapper:
     def __init__(self):
@@ -870,3 +871,106 @@ class GitWrapper:
             return ""
         except GitCommandError:
             return ""
+
+    # -----------------------------------
+    # Issue and Label Operations
+    # -----------------------------------
+
+    def list_issues_by_label(self, labels: List[str], state: str = "open") -> List[dict]:
+        """List issues with specified labels.
+
+        Args:
+            labels (List[str]): List of label names to filter by
+            state (str): Issue state ('open', 'closed', or 'all')
+
+        Returns:
+            List[dict]: List of issues matching the criteria
+        """
+        try:
+            cmd = ["gh", "issue", "list",
+                  "--json", "number,title,labels,state,url",
+                  "--state", state]
+
+            for label in labels:
+                cmd.extend(["--label", label])
+
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return json.loads(result.stdout)
+        except subprocess.CalledProcessError as e:
+            self.console.print(f"[red]Error listing issues: {e.stderr}[/red]")
+            raise
+
+    def get_repo_labels(self) -> List[dict]:
+        """Get all labels defined in the repository.
+
+        Returns:
+            List[dict]: List of label objects with name, color, and description
+        """
+        try:
+            result = subprocess.run(
+                ["gh", "label", "list", "--json", "name,color,description"],
+                capture_output=True, text=True, check=True
+            )
+            return json.loads(result.stdout)
+        except subprocess.CalledProcessError as e:
+            self.console.print(f"[red]Error getting labels: {e.stderr}[/red]")
+            raise
+
+    def create_label(self, name: str, color: str, description: str = "") -> None:
+        """Create a new label in the repository.
+
+        Args:
+            name (str): Label name
+            color (str): Color in hex format (e.g., 'ff0000')
+            description (str, optional): Label description
+        """
+        try:
+            cmd = ["gh", "label", "create", name,
+                  "--color", color.lstrip('#')]
+            if description:
+                cmd.extend(["--description", description])
+
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            self.console.print(f"[green]Created label '{name}'[/green]")
+        except subprocess.CalledProcessError as e:
+            if "already exists" in e.stderr:
+                self.console.print(f"[yellow]Label '{name}' already exists[/yellow]")
+            else:
+                self.console.print(f"[red]Error creating label: {e.stderr}[/red]")
+                raise
+
+    def add_labels_to_issue(self, issue_number: int, labels: List[str]) -> None:
+        """Add labels to an issue.
+
+        Args:
+            issue_number (int): Issue number
+            labels (List[str]): Labels to add
+        """
+        try:
+            cmd = ["gh", "issue", "edit", str(issue_number)]
+            for label in labels:
+                cmd.extend(["--add-label", label])
+
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            self.console.print(f"[green]Added labels to issue #{issue_number}[/green]")
+        except subprocess.CalledProcessError as e:
+            self.console.print(f"[red]Error adding labels: {e.stderr}[/red]")
+            raise
+
+    def remove_labels_from_issue(self, issue_number: int, labels: List[str]) -> None:
+        """Remove labels from an issue.
+
+        Args:
+            issue_number (int): Issue number
+            labels (List[str]): Labels to remove
+        """
+        try:
+            cmd = ["gh", "issue", "edit", str(issue_number)]
+            for label in labels:
+                cmd.extend(["--remove-label", label])
+
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            self.console.print(f"[green]Removed labels from issue #{issue_number}[/green]")
+        except subprocess.CalledProcessError as e:
+            self.console.print(f"[red]Error removing labels: {e.stderr}[/red]")
+            raise
