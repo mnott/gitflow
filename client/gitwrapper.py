@@ -737,14 +737,7 @@ class GitWrapper:
             raise
 
     def is_worktree(self, branch):
-        """Check if a branch is currently used in a worktree.
-
-        Args:
-            branch (str): Branch name to check
-
-        Returns:
-            tuple: (bool, str) - (is_worktree, worktree_path) or (False, None)
-        """
+        """Check if a branch is currently used in a worktree."""
         try:
             worktree_list = self.repo.git.worktree('list', '--porcelain').split('\n')
             current_worktree = None
@@ -752,8 +745,8 @@ class GitWrapper:
 
             for line in worktree_list:
                 if line.startswith('worktree '):
-                    # Convert path to use system-specific separators and normalize
-                    current_worktree = str(Path(line.split(' ', 1)[1]).resolve())
+                    raw_path = line.split(' ', 1)[1]
+                    current_worktree = str(Path(raw_path).resolve())
                 elif line.startswith('branch '):
                     current_branch = line.split('refs/heads/', 1)[1]
                     if current_branch == branch:
