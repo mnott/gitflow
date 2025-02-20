@@ -752,7 +752,8 @@ class GitWrapper:
 
             for line in worktree_list:
                 if line.startswith('worktree '):
-                    current_worktree = line.split(' ', 1)[1]
+                    # Convert path to use system-specific separators and normalize
+                    current_worktree = str(Path(line.split(' ', 1)[1]).resolve())
                 elif line.startswith('branch '):
                     current_branch = line.split('refs/heads/', 1)[1]
                     if current_branch == branch:
