@@ -7,6 +7,8 @@ from typing import Optional, Dict, List
 import subprocess
 import sys
 import json
+import os
+import re
 
 class GitWrapper:
     def __init__(self):
@@ -1057,9 +1059,9 @@ class GitWrapper:
         return gitflow_version, repo_version
 
     def update_repository_version(self, version: str, silent: bool = False) -> None:
-        """Update the repository version in .version file"""
+        """Update the repository version in .version file and gitflow.py if in gitflow repo"""
         try:
-            # Check if file exists and has different content
+            # Always update .version file
             current_version = None
             try:
                 with open('.version', 'r') as f:
@@ -1069,12 +1071,40 @@ class GitWrapper:
 
             # Only update if version is different or file doesn't exist
             if current_version != version:
-                # Write the version to the file
+                # Update .version file
                 with open('.version', 'w') as f:
-                    f.write(version + '\n')  # Add newline to avoid % at end of file
+                    f.write(version + '\n')
 
-                # Use git commands directly instead of index operations
-                self.repo.git.add('.version')
+                # Check if we're in the gitflow repository by looking for specific files/structure
+                is_gitflow_repo = (
+                    os.path.isdir('client') and
+                    os.path.isfile('client/gitwrapper.py') and
+                    os.path.isfile('gitflow.py') and
+                    '.git' in os.listdir('.')
+                )
+
+                files_to_add = ['.version']
+
+                # Only update gitflow.py if we're in the gitflow repository
+                if is_gitflow_repo:
+                    # Update __version__ in gitflow.py
+                    with open('gitflow.py', 'r') as f:
+                        content = f.read()
+
+                    # Replace version using regex to handle different quote styles
+                    new_content = re.sub(
+                        r'__version__\s*=\s*["\'].*?["\']',
+                        f'__version__ = "{version}"',
+                        content
+                    )
+
+                    with open('gitflow.py', 'w') as f:
+                        f.write(new_content)
+
+                    files_to_add.append('gitflow.py')
+
+                # Add files and commit
+                self.repo.git.add(files_to_add)
                 self.repo.git.commit('-m', f"chore: update repository version to {version}")
 
                 if not silent:
