@@ -440,6 +440,8 @@ To re-create the documentation and write it to the output file, run:
 
 """
 
+__version__ = "1.0.9"
+
 from collections import defaultdict
 from datetime import datetime, timedelta
 from git import Repo, GitCommandError
@@ -487,6 +489,22 @@ app = typer.Typer(
     epilog="To get help about the script, call it with the --help option."
 )
 
+def version_callback(value: bool):
+    if value:
+        console.print(f"GitFlow version {__version__}")
+        raise typer.Exit()
+
+@app.callback()
+def main(
+    version: bool = typer.Option(
+        False, "--version", "-v",
+        help="Show the version and exit",
+        callback=version_callback,
+        is_eager=True
+    )
+):
+    """GitFlow - A tool for managing Git workflows."""
+    pass
 
 # Initialize the GitWrapper
 git_wrapper = GitWrapper()
@@ -861,13 +879,11 @@ def finish(
     delete: bool = typer.Option(True, "-d", "--delete", help="Delete the branch after finishing"),
     keep_local: bool = typer.Option(False, "-k", "--keep-local", help="Keep the local branch after finishing")
 ):
-    """
-    Finish the current feature, hotfix, or release branch by creating pull requests for main and/or develop.
-    Must be run from the branch that is being finished.
-    """
-    try:
-        current_branch = git_wrapper.get_current_branch()
+    """Finish the current branch according to gitflow conventions."""
+    git = GitWrapper()
+    current_branch = git.get_current_branch()
 
+    try:
         if current_branch in ['main', 'develop']:
             console.print("[red]Error: Cannot finish main or develop branches[/red]")
             return
@@ -920,6 +936,17 @@ def finish(
                 console.print(f"[yellow]Keeping local branch {current_branch} as requested.[/yellow]")
         else:
             console.print(f"[yellow]Branch {current_branch} not deleted due to merge issues.[/yellow]")
+
+        if branch_type == "release":
+            # Get the version from the branch name
+            version = current_branch.split('/')[-1]
+            if version.startswith('v'):
+                version = version[1:]
+
+            # Update version in code before creating tag
+            git_wrapper.update_version_in_code(version)
+
+            # Continue with existing release finish logic...
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
