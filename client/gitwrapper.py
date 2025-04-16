@@ -7,6 +7,8 @@ from typing import Optional, Dict, List
 import subprocess
 import sys
 import json
+import os
+import re
 
 class GitWrapper:
     def __init__(self):
@@ -1057,9 +1059,9 @@ class GitWrapper:
         return gitflow_version, repo_version
 
     def update_repository_version(self, version: str, silent: bool = False) -> None:
-        """Update the repository version in .version file"""
+        """Update the repository version in .version file and gitflow.py"""
         try:
-            # Check if file exists and has different content
+            # Check if .version needs updating
             current_version = None
             try:
                 with open('.version', 'r') as f:
@@ -1069,12 +1071,27 @@ class GitWrapper:
 
             # Only update if version is different or file doesn't exist
             if current_version != version:
-                # Write the version to the file
+                # Update .version file
                 with open('.version', 'w') as f:
-                    f.write(version + '\n')  # Add newline to avoid % at end of file
+                    f.write(version + '\n')
 
-                # Use git commands directly instead of index operations
-                self.repo.git.add('.version')
+                # Update __version__ in gitflow.py
+                gitflow_path = os.path.join(os.path.dirname(__file__), '..', 'gitflow.py')
+                with open(gitflow_path, 'r') as f:
+                    content = f.read()
+
+                # Replace version using regex to handle different quote styles
+                new_content = re.sub(
+                    r'__version__\s*=\s*["\'].*?["\']',
+                    f'__version__ = "{version}"',
+                    content
+                )
+
+                with open(gitflow_path, 'w') as f:
+                    f.write(new_content)
+
+                # Add both files and commit
+                self.repo.git.add(['.version', 'gitflow.py'])
                 self.repo.git.commit('-m', f"chore: update repository version to {version}")
 
                 if not silent:
