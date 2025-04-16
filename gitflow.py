@@ -440,7 +440,7 @@ To re-create the documentation and write it to the output file, run:
 
 """
 
-__version__ = "1.0.10"
+__version__ = "1.0.13"
 
 from collections import defaultdict
 from datetime import datetime, timedelta
