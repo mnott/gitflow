@@ -491,7 +491,11 @@ app = typer.Typer(
 
 def version_callback(value: bool):
     if value:
-        console.print(f"GitFlow version {__version__}")
+        git = GitWrapper()
+        gitflow_version, repo_version = git.get_version_info()
+        console.print(f"GitFlow    version: {gitflow_version or 'unknown'}")
+        if repo_version:
+            console.print(f"Repository version: {repo_version}")
         raise typer.Exit()
 
 @app.callback()
@@ -772,41 +776,30 @@ def config(
 #
 @app.command()
 def start(
-    name:         Optional[str] = typer.Argument(None,                         help="Specify the feature, local, hotfix, release, or backup name"),
-    branch_type:            str = typer.Option("local", "-t", "--type",        help="Specify the branch type: local, hotfix, feature, release, or backup"),
-    week:         Optional[int] = typer.Option(None,    "-w", "--week",        help="Specify the calendar week"),
-    increment:              str = typer.Option("patch", "-i", "--increment",   help="Specify the version increment type: major, minor, patch"),
-    message:      Optional[str] = typer.Option(None,    "-m", "--message",     help="Specify a commit message"),
-    skip_switch:           bool = typer.Option(False,   "-s", "--skip-switch", help="Skip switching to main or develop branch before creating the new branch")
+    name: Optional[str] = typer.Argument(None, help="Specify the feature, local, hotfix, release, or backup name"),
+    branch_type: str = typer.Option("local", "-t", "--type", help="Specify the branch type: local, hotfix, feature, release, or backup"),
+    week: Optional[int] = typer.Option(None, "-w", "--week", help="Specify the calendar week"),
+    increment: str = typer.Option("patch", "-i", "--increment", help="Specify the version increment type: major, minor, patch"),
+    message: Optional[str] = typer.Option(None, "-m", "--message", help="Specify a commit message"),
+    skip_switch: bool = typer.Option(False, "-s", "--skip-switch", help="Skip switching to main or develop branch before creating the new branch")
 ):
-    """
-    Start a new feature, hotfix, or release branch.
+    # Create GitWrapper instance at the start of the function
+    git = GitWrapper()
+    offline = not git.check_network_connection()
 
-    If a name is provided, create a feature, hotfix, or release branch.
-    Otherwise, create a weekly update hotfix branch.
-
-    Parameters:
-    - name       : The name of the feature, hotfix, or release branch. Optional for hotfix branches.
-    - branch_type: The type of branch to create ('local', 'hotfix', 'feature', or 'release').
-    - week       : The calendar week for a weekly hotfix branch.
-    - increment  : The version increment type for release branches ('major', 'minor', or 'patch').
-    - message    : An optional commit message.
-    - skip_switch: Whether to skip switching to the main or develop branch before creating the new branch. True is assumed for -t backup.
-    """
-    offline = not git_wrapper.check_network_connection()
     if offline:
         console.print("[yellow]Network is unavailable. Operating in offline mode.[/yellow]")
 
     # Auto-stash if needed
-    has_changes = git_wrapper.is_dirty()
+    has_changes = git.is_dirty()
     if has_changes:
-        git_wrapper.stash('save')
+        git.stash('save')
 
     version_tag = None
-    existing_tags = git_wrapper.get_tags()
+    existing_tags = git.get_tags()
 
     if branch_type == "hotfix" and name is None:
-        week_number = git_wrapper.get_week_number(week)
+        week_number = git.get_week_number(week)
         name = f"week-{week_number}"
 
     if name:
@@ -829,35 +822,44 @@ def start(
 
     try:
         if not skip_switch:
-            # Checkout base branch
-            git_wrapper.checkout(base_branch)
+            # Switch to the appropriate base branch
+            base_branch = 'main' if branch_type in ['hotfix', 'release'] else 'develop'
+            git.checkout(base_branch)
+
+            # Pull changes from remote, but don't try to rebase
+            try:
+                git.repo.git.pull('origin', base_branch, '--ff-only')
+            except GitCommandError as e:
+                console.print(f"[red]Error pulling from remote: {e}[/red]")
+                raise
+
             if not offline:
                 # Pull the latest changes if online
-                git_wrapper.pull('origin', base_branch)
+                git.pull('origin', base_branch)
             else:
                 console.print(f"[yellow]Skipping pull from {base_branch} due to offline mode.[/yellow]")
 
         # Check if the branch already exists
-        if branch_name in git_wrapper.get_branches():
-            git_wrapper.checkout(branch_name)
+        if branch_name in git.get_branches():
+            git.checkout(branch_name)
             console.print(f"[yellow]Switched to existing branch {branch_name}[/yellow]")
         else:
             # Create and checkout the new branch
-            git_wrapper.checkout(branch_name, create=True)
+            git.checkout(branch_name, create=True)
             console.print(f"[green]Created and switched to branch {branch_name}[/green]")
 
         if message:
             # Commit the initial changes if a message is provided
-            git_wrapper.add('.')
-            if git_wrapper.get_index_diff("HEAD"):
-                git_wrapper.commit(message)
+            git.add('.')
+            if git.get_index_diff("HEAD"):
+                git.commit(message)
                 console.print(f"[green]Initial commit with message: {message}[/green]")
             else:
                 console.print(f"[yellow]No changes to commit.[/yellow]")
 
         if branch_type == "release" and version_tag:
             # Create the tag locally, but don't push it yet
-            git_wrapper.create_tag(version_tag, message=f"Release {version_tag}")
+            git.create_tag(version_tag, message=f"Release {version_tag}")
             console.print(f"[green]Created local tag {version_tag}[/green]")
 
         if offline:
@@ -865,7 +867,7 @@ def start(
 
         # Restore changes if we stashed them
         if has_changes:
-            git_wrapper.stash('pop')
+            git.stash('pop')
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -909,7 +911,7 @@ def finish(
         else:
             fetch(remote="origin", branch=None, all_remotes=False, prune=False)
 
-        push_changes = git_wrapper.push_to_remote(current_branch)
+        push_changes = git.push_to_remote(current_branch)
 
         if not push_changes:
             console.print("[yellow]No changes to push. Finishing operation.[/yellow]")
@@ -917,38 +919,47 @@ def finish(
 
         target_branches = ["main", "develop"] if branch_type in ["hotfix", "release"] else ["develop"]
 
-        # For release branches, push the tag before merging
-        if branch_type == 'release' and not offline:
-            tag_name = current_branch.split('/')[-1]
-            try:
-                git_wrapper.push('origin', tag_name)
-                console.print(f"[green]Pushed tag {tag_name} to remote[/green]")
-            except GitCommandError as e:
-                console.print(f"[yellow]Warning: Failed to push tag {tag_name}. Error: {e}[/yellow]")
-
-        merge_successful = all(git_wrapper.merge_to_target(current_branch, target) for target in target_branches)
-
         if branch_type == "release":
             # Get the version from the branch name
             version = current_branch.split('/')[-1]
             if version.startswith('v'):
                 version = version[1:]
 
-            # Update version in code before creating tag
-            git_wrapper.update_version_in_code(version)
+            # Update version in the release branch
+            git.update_repository_version(version, silent=True)  # Add silent parameter
+            git.push('origin', current_branch)
+            console.print(f"[green]Updated repository version to {version}[/green]")
 
-            # Push the version update to both main and develop
-            for target in ['main', 'develop']:
-                git_wrapper.checkout(target)
-                git_wrapper.push('origin', target)
-                console.print(f"[green]Pushed version update to {target}[/green]")
+            # Push the tag
+            tag_name = f"v{version}"
+            git.push('origin', tag_name)
+            console.print(f"[green]Pushed tag {tag_name} to remote[/green]")
 
-        if merge_successful:
-            if delete and not keep_local:
-                git_wrapper.delete_branch(current_branch, delete_remote=True, delete_local=True)  # Explicitly delete both
-                git_wrapper.cleanup_temp_branches()  # This will only delete local temp branches
-            elif keep_local:
-                console.print(f"[yellow]Keeping local branch {current_branch} as requested.[/yellow]")
+            # First merge into main
+            git.checkout('main')
+            git.merge(current_branch, no_ff=True)
+            git.push('origin', 'main')
+            console.print(f"[green]Merged and pushed {current_branch} into main[/green]")
+
+            # Then merge main into develop
+            git.checkout('develop')
+            git.merge('main', no_ff=True)
+            git.push('origin', 'develop')
+            console.print(f"[green]Merged and pushed main into develop[/green]")
+
+        # Merge into target branches - the version update will be included automatically
+        for target in target_branches:
+            git.checkout(target)
+            git.merge(current_branch, no_ff=True)
+            git.push('origin', target)
+            console.print(f"[green]Merged and pushed {current_branch} into {target}[/green]")
+
+        # Delete branches if requested
+        if delete and not keep_local:
+            git.delete_branch(current_branch, delete_remote=True, delete_local=True)  # Explicitly delete both
+            git.cleanup_temp_branches()  # This will only delete local temp branches
+        elif keep_local:
+            console.print(f"[yellow]Keeping local branch {current_branch} as requested.[/yellow]")
         else:
             console.print(f"[yellow]Branch {current_branch} not deleted due to merge issues.[/yellow]")
 
