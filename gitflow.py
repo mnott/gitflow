@@ -468,7 +468,6 @@ This means:
 - In other repositories: only `.version` gets updated
 - `gf -v` shows both versions for clarity
 
-Example output of `gf -v`:
 
 """
 
