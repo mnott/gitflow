@@ -972,3 +972,58 @@ class GitWrapper:
         except subprocess.CalledProcessError as e:
             self.console.print(f"[red]Error removing labels: {e.stderr}[/red]")
             raise
+
+    def update_version_in_code(self, version: str, file_path: str = "gitflow.py") -> None:
+        """Update the __version__ variable in the code.
+
+        Args:
+            version (str): The new version number (without 'v' prefix)
+            file_path (str): Path to the file containing __version__
+        """
+        try:
+            # Read the current file content
+            with open(file_path, 'r') as f:
+                lines = f.readlines()
+
+            # Find and update the __version__ line
+            version_updated = False
+            for i, line in enumerate(lines):
+                if line.startswith('__version__'):
+                    lines[i] = f'__version__ = "{version}"\n'
+                    version_updated = True
+                    break
+
+            # If __version__ wasn't found, add it at the top (after any module docstring)
+            if not version_updated:
+                # Find the right spot after docstring or at the top
+                insert_pos = 0
+                in_docstring = False
+                triple_quote = '"""'
+
+                for i, line in enumerate(lines):
+                    if line.strip().startswith(triple_quote):
+                        if in_docstring:
+                            insert_pos = i + 1
+                            break
+                        in_docstring = True
+                    elif not in_docstring and line.strip() and not line.startswith('#'):
+                        insert_pos = i
+                        break
+
+                lines.insert(insert_pos, f'__version__ = "{version}"\n\n')
+
+            # Write the updated content back
+            with open(file_path, 'w') as f:
+                f.writelines(lines)
+
+            # Stage the change
+            self.add(file_path)
+
+            # Commit the version update
+            self.repo.index.commit(f"chore: update version to {version}")
+
+            self.console.print(f"[green]Updated version to {version} in {file_path}[/green]")
+
+        except Exception as e:
+            self.console.print(f"[red]Error updating version in code: {e}[/red]")
+            raise
