@@ -928,15 +928,6 @@ def finish(
 
         merge_successful = all(git_wrapper.merge_to_target(current_branch, target) for target in target_branches)
 
-        if merge_successful:
-            if delete and not keep_local:
-                git_wrapper.delete_branch(current_branch, delete_remote=True, delete_local=True)  # Explicitly delete both
-                git_wrapper.cleanup_temp_branches()  # This will only delete local temp branches
-            elif keep_local:
-                console.print(f"[yellow]Keeping local branch {current_branch} as requested.[/yellow]")
-        else:
-            console.print(f"[yellow]Branch {current_branch} not deleted due to merge issues.[/yellow]")
-
         if branch_type == "release":
             # Get the version from the branch name
             version = current_branch.split('/')[-1]
@@ -946,7 +937,20 @@ def finish(
             # Update version in code before creating tag
             git_wrapper.update_version_in_code(version)
 
-            # Continue with existing release finish logic...
+            # Push the version update to both main and develop
+            for target in ['main', 'develop']:
+                git_wrapper.checkout(target)
+                git_wrapper.push('origin', target)
+                console.print(f"[green]Pushed version update to {target}[/green]")
+
+        if merge_successful:
+            if delete and not keep_local:
+                git_wrapper.delete_branch(current_branch, delete_remote=True, delete_local=True)  # Explicitly delete both
+                git_wrapper.cleanup_temp_branches()  # This will only delete local temp branches
+            elif keep_local:
+                console.print(f"[yellow]Keeping local branch {current_branch} as requested.[/yellow]")
+        else:
+            console.print(f"[yellow]Branch {current_branch} not deleted due to merge issues.[/yellow]")
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
