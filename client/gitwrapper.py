@@ -1027,3 +1027,62 @@ class GitWrapper:
         except Exception as e:
             self.console.print(f"[red]Error updating version in code: {e}[/red]")
             raise
+
+    def get_version_info(self) -> tuple[Optional[str], Optional[str]]:
+        """Get version information from both gitflow and current repository.
+
+        Returns:
+            tuple: (gitflow_version, repo_version)
+        """
+        gitflow_version = None
+        repo_version = None
+
+        # Get gitflow version from the code
+        try:
+            with open(Path(__file__).parent.parent / "gitflow.py", "r") as f:
+                for line in f:
+                    if line.startswith("__version__"):
+                        gitflow_version = line.split("=")[1].strip().strip('"\'')
+                        break
+        except Exception:
+            pass
+
+        # Get repository version from .version file
+        try:
+            with open(".version", "r") as f:
+                repo_version = f.read().strip()
+        except Exception:
+            pass
+
+        return gitflow_version, repo_version
+
+    def update_repository_version(self, version: str, silent: bool = False) -> None:
+        """Update the repository version in .version file"""
+        try:
+            # Check if file exists and has different content
+            current_version = None
+            try:
+                with open('.version', 'r') as f:
+                    current_version = f.read().strip()
+            except FileNotFoundError:
+                pass
+
+            # Only update if version is different or file doesn't exist
+            if current_version != version:
+                # Write the version to the file
+                with open('.version', 'w') as f:
+                    f.write(version + '\n')  # Add newline to avoid % at end of file
+
+                # Use git commands directly instead of index operations
+                self.repo.git.add('.version')
+                self.repo.git.commit('-m', f"chore: update repository version to {version}")
+
+                if not silent:
+                    self.console.print(f"[green]Updated repository version to {version}[/green]")
+            else:
+                if not silent:
+                    self.console.print(f"[yellow]Version {version} already set in .version file[/yellow]")
+
+        except Exception as e:
+            self.console.print(f"[red]Error updating repository version: {e}[/red]")
+            raise
