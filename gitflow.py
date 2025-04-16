@@ -472,7 +472,7 @@ Example output of `gf -v`:
 
 """
 
-__version__ = "1.0.15"
+__version__ = "1.0.16"
 
 from collections import defaultdict
 from datetime import datetime, timedelta
