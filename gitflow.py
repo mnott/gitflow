@@ -468,6 +468,7 @@ import tempfile
 import subprocess
 import os
 import time
+from pathlib import Path
 
 # Local imports
 from client import AIClient, GitConfig, DocGenerator, GitWrapper
@@ -3009,142 +3010,90 @@ def pull(
     prune:        bool          = typer.Option(False,"-p",  "--prune",  help="Prune remote-tracking branches no longer on remote"),
     rebase:       bool          = typer.Option(False,"-r",  "--rebase", help="Rebase the current branch on top of the upstream branch after fetching")
 ):
-    """
-    Pull changes from a remote repository.
+    """Pull changes from the remote repository."""
+    git = GitWrapper()
 
-    Examples:
-    - Pull from origin:
-        ./gitflow.py pull
-    - Pull from a specific remote:
-        ./gitflow.py pull --remote upstream
-    - Pull a specific branch:
-        ./gitflow.py pull --branch feature/new-feature
-    - Pull with rebase:
-        ./gitflow.py pull --rebase
-    - Pull all branches:
-        ./gitflow.py pull --all
-    - Pull and prune:
-        ./gitflow.py pull --prune
-    """
-    if not git_wrapper.check_network_connection():
-        console.print("[red]Error: No network connection. Unable to pull.[/red]")
-        return
+    # Fetch changes first
+    git.fetch(remote, None, False, prune)
+    console.print("Fetched changes from remote.")
 
-    try:
-        original_branch = git_wrapper.get_current_branch()
-        stashed_changes = False
+    if all_branches:
+        console.print("Pulling changes for all local branches...")
+        current_branch = git.get_current_branch()
+        current_path = Path.cwd()
 
-        # Fetch changes first
-        fetch_args = ['--all'] if all_branches else [remote]
-        if prune:
-            fetch_args.append('--prune')
-        git_wrapper.fetch(*fetch_args)
-        console.print("[green]Fetched changes from remote.[/green]")
-
-        if all_branches:
-            console.print("[blue]Pulling changes for all local branches...[/blue]")
-
-            # Check for uncommitted changes before starting
-            if git_wrapper.is_dirty(untracked_files=True):
-                action = inquirer.select(
-                    message="You have uncommitted changes. What would you like to do?",
-                    choices=[
-                        "Stash changes",
-                        "Continue without stashing",
-                        "Abort"
-                    ]
-                ).execute()
-
-                if action == "Stash changes":
-                    git_wrapper.stash('push')
-                    console.print("[green]Changes stashed.[/green]")
-                    stashed_changes = True
-                elif action == "Abort":
-                    console.print("[yellow]Operation aborted.[/yellow]")
-                    return
-
-            # Loop through each local branch and pull updates if there are changes
-            for branch in git_wrapper.get_branches():
-                local_commit = git_wrapper.rev_parse(branch.name)
-                remote_commit = git_wrapper.rev_parse(f'{remote}/{branch.name}')
-
-                if local_commit != remote_commit:
-                    # Check if branch is in a worktree
-                    is_worktree, worktree_path = git_wrapper.is_worktree(branch.name)
-                    if is_worktree:
-                        console.print(f"[yellow]Skipping branch {branch.name} - it's used in worktree at {worktree_path}[/yellow]")
-                        continue
-
-                    git_wrapper.checkout(branch.name)
-                    console.print(f"[blue]Updating branch {branch.name}...[/blue]")
-                    try:
-                        result = git_wrapper.pull(remote, branch.name, rebase=rebase)
-                        console.print(f"[green]Pulled changes for branch {branch.name}[/green]")
-                        console.print(result)
-                    except GitCommandError as e:
-                        console.print(f"[red]Error pulling changes for branch {branch.name}: {e}[/red]")
-                else:
-                    console.print(f"[yellow]Branch {branch.name} is up to date.[/yellow]")
-
-            # Return to the original branch
-            git_wrapper.checkout(original_branch)
-            console.print(f"[green]Returned to branch {original_branch}[/green]")
-        else:
-            # Pull changes for the current branch
-            current_branch = branch or git_wrapper.get_current_branch()
-            console.print(f"[blue]Pulling changes for branch {current_branch}...[/blue]")
-
-            if git_wrapper.is_dirty(untracked_files=True):
-                action = inquirer.select(
-                    message="You have uncommitted changes. What would you like to do?",
-                    choices=[
-                        "Stash changes",
-                        "Continue without stashing",
-                        "Abort"
-                    ]
-                ).execute()
-
-                if action == "Stash changes":
-                    stash_message = inquirer.text(message="Enter a stash message (optional):").execute()
-                    if stash_message:
-                        git_wrapper.stash('push', message=stash_message)
-                    else:
-                        git_wrapper.stash('push')
-                    console.print("[green]Changes stashed.[/green]")
-                    stashed_changes = True
-                elif action == "Abort":
-                    console.print("[yellow]Pull aborted.[/yellow]")
-                    return
-
+        for local_branch in git.get_local_branches():
             try:
-                result = git_wrapper.pull(remote, current_branch, rebase=rebase)
-                console.print(f"[green]Pulled changes for branch {current_branch}[/green]")
-                console.print(result)
-            except GitCommandError as e:
-                console.print(f"[red]Error pulling changes for branch {current_branch}: {e}[/red]")
+                # Check if branch is in a worktree
+                is_worktree, worktree_path = git.is_worktree(local_branch)
 
-        # After successful pull, ask if user wants to pop the stash
-        if stashed_changes:
-            pop_stash = inquirer.confirm(message="Do you want to pop the stashed changes?", default=True).execute()
-            if pop_stash:
-                try:
-                    git_wrapper.stash('pop')
-                    console.print("[green]Popped the stashed changes.[/green]")
-                except GitCommandError as e:
-                    console.print(f"[red]Error popping stash: {e}[/red]")
-                    console.print("[yellow]You may need to resolve conflicts manually.[/yellow]")
+                # Don't skip if it's the current worktree
+                if is_worktree and Path(worktree_path) == current_path:
+                    is_worktree = False
+                    worktree_path = None
 
-        # Show the status after pulling
-        status()
+                if is_worktree:
+                    console.print(f"Skipping branch {local_branch} - it's used in worktree at {worktree_path}")
+                    continue
 
-    except GitCommandError as e:
-        console.print(f"[red]Error: {e}[/red]")
-        if "Your local changes to the following files would be overwritten by merge" in str(e):
-            console.print("[yellow]You have local changes that conflict with the changes you're pulling.[/yellow]")
-            console.print("[yellow]Please commit, stash, or discard your local changes before pulling.[/yellow]")
-        elif "Please commit your changes or stash them before you merge" in str(e):
-            console.print("[yellow]You have uncommitted changes in your working directory.[/yellow]")
-            console.print("[yellow]Please commit or stash your changes before pulling.[/yellow]")
+                # Switch to branch and pull
+                if local_branch != current_branch:
+                    git.checkout(local_branch)
+
+                # Check if branch exists on remote
+                remote_exists = subprocess.run(
+                    ['git', 'ls-remote', '--heads', remote, local_branch],
+                    capture_output=True, text=True
+                ).stdout.strip()
+
+                if not remote_exists:
+                    console.print(f"[yellow]Branch {local_branch} no longer exists on remote - skipping[/yellow]")
+                    continue
+
+                pull_args = ['git', 'pull', remote]
+                if rebase:
+                    pull_args.append('--rebase')
+
+                result = subprocess.run(pull_args, capture_output=True, text=True)
+                if result.returncode == 0:
+                    if "Already up to date" in result.stdout:
+                        console.print(f"Branch {local_branch} is up to date.")
+                    else:
+                        console.print(f"Pulled changes for branch {local_branch}")
+                else:
+                    error_msg = result.stderr.lower()
+                    if "no such ref was fetched" in error_msg or "couldn't find remote ref" in error_msg:
+                        console.print(f"[yellow]Branch {local_branch} no longer exists on remote - skipping[/yellow]")
+                    else:
+                        console.print(f"[red]Error pulling branch {local_branch}: {result.stderr}[/red]")
+
+            except Exception as e:
+                console.print(f"[red]Error processing branch {local_branch}: {e}[/red]")
+
+        # Return to original branch
+        if current_branch != git.get_current_branch():
+            git.checkout(current_branch)
+            console.print(f"Returned to branch {current_branch}")
+
+    else:
+        # Pull single branch
+        pull_args = ['git', 'pull', remote]
+        if branch:
+            pull_args.append(branch)
+        if rebase:
+            pull_args.append('--rebase')
+
+        try:
+            result = subprocess.run(pull_args, capture_output=True, text=True)
+            if result.returncode == 0:
+                if "Already up to date" in result.stdout:
+                    console.print("Branch is up to date.")
+                else:
+                    console.print("Pulled changes successfully.")
+            else:
+                console.print(f"[red]Error pulling changes: {result.stderr}[/red]")
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
 
 
 
