@@ -1022,7 +1022,7 @@ class GitWrapper:
             self.add(file_path)
 
             # Commit the version update
-            self.repo.index.commit(f"chore: update version to {version}")
+            self.repo.index.commit(f"Chore: update version to {version}")
 
             self.console.print(f"[green]Updated version to {version} in {file_path}[/green]")
 
@@ -1105,7 +1105,7 @@ class GitWrapper:
 
                 # Add files and commit
                 self.repo.git.add(files_to_add)
-                self.repo.git.commit('-m', f"chore: update repository version to {version}")
+                self.repo.git.commit('-m', f"Chore: update repository version to {version}")
 
                 if not silent:
                     self.console.print(f"[green]Updated repository version to {version}[/green]")

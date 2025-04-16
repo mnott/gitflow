@@ -438,6 +438,38 @@ To re-create the documentation and write it to the output file, run:
 ./gitflow.py doc
 ```
 
+# GitFlow Version System
+
+The GitFlow tool maintains two version numbers:
+
+1. **Repository Version** (`.version` file)
+   - Stored in the `.version` file at the root of each repository
+   - Updated during release branch operations
+   - Represents the current version of the repository
+   - Used as the source of truth for version numbers
+
+2. **GitFlow Version** (`__version__` in gitflow.py)
+   - Stored in `gitflow.py` as `__version__` variable
+   - Only updated when in the actual gitflow repository
+   - Shown when running `gf -v`
+   - Represents the version of the GitFlow tool itself
+
+## Version Update Process
+
+When running `gf finish` on a release branch:
+
+1. The version is extracted from the release branch name (e.g., `release/v1.8.40` → `1.8.40`)
+2. The `.version` file is updated with this version number
+3. If in the gitflow repository (detected by presence of `client/gitwrapper.py` and other files), `__version__` in `gitflow.py` is also updated
+4. Changes are committed and merged into `main` and `develop`
+
+This means:
+- In the gitflow repository: both `.version` and `gitflow.py` get updated
+- In other repositories: only `.version` gets updated
+- `gf -v` shows both versions for clarity
+
+Example output of `gf -v`:
+
 """
 
 __version__ = "1.0.15"
