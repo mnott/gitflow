@@ -3146,8 +3146,10 @@ def pull(
                 if rebase:
                     pull_args.append('--rebase')
 
-                result = subprocess.run(pull_args, text=True)
+                result = subprocess.run(pull_args, capture_output=True, text=True)
                 if result.returncode == 0:
+                    if result.stdout:
+                        print(result.stdout.strip())  # Print the actual git output
                     if "Already up to date" in result.stdout:
                         console.print(f"Branch {local_branch} is up to date.")
                     else:
@@ -3176,8 +3178,10 @@ def pull(
             pull_args.append('--rebase')
 
         try:
-            result = subprocess.run(pull_args, text=True)
+            result = subprocess.run(pull_args, capture_output=True, text=True)
             if result.returncode == 0:
+                if result.stdout:
+                    print(result.stdout.strip())  # Print the actual git output
                 if "Already up to date" in result.stdout:
                     console.print("Branch is up to date.")
                 else:
