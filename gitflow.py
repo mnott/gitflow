@@ -3094,27 +3094,63 @@ def pull(
         console.print("Pulling changes for all local branches...")
         current_branch = git.get_current_branch()
         current_path = Path.cwd()
+        console.print(f"[blue]Current branch: {current_branch}[/blue]")
 
-        for local_branch in git.get_local_branches():
+        # First pull the current branch
+        console.print(f"[blue]Pulling current branch {current_branch}...[/blue]")
+        pull_args = ['git', 'pull', remote]
+        if rebase:
+            pull_args.insert(2, '--rebase')
+        result = subprocess.run(pull_args, capture_output=True, text=True)
+        if result.returncode == 0:
+            if result.stdout:
+                for line in result.stdout.strip().split('\n'):
+                    if line.startswith('Updating'):
+                        console.print(f"[blue]{line}[/blue]")
+                    elif line.startswith('Fast-forward'):
+                        console.print(f"[green]{line}[/green]")
+                    elif line.startswith('Already up to date'):
+                        console.print(f"[yellow]{line}[/yellow]")
+                    else:
+                        if line.startswith('+++') or line.startswith('---'):
+                            console.print(line)
+                        else:
+                            colored_line = ''
+                            for char in line:
+                                if char == '+':
+                                    colored_line += '[green]+[/green]'
+                                elif char == '-':
+                                    colored_line += '[red]-[/red]'
+                                else:
+                                    colored_line += char
+                            console.print(colored_line)
+            if "Already up to date" in result.stdout:
+                console.print(f"[yellow]Branch {current_branch} is up to date.[/yellow]")
+            else:
+                console.print(f"[green]Pulled changes for branch {current_branch}[/green]")
+        else:
+            console.print(f"[red]Error pulling current branch: {result.stderr}[/red]")
+
+        # Then pull all other branches
+        local_branches = git.get_local_branches()
+        console.print(f"[blue]Found {len(local_branches)} local branches[/blue]")
+
+        for local_branch in local_branches:
+            if local_branch == current_branch:
+                console.print(f"[blue]Skipping current branch {local_branch} as it was already pulled[/blue]")
+                continue
+
+            console.print(f"[blue]Processing branch {local_branch}...[/blue]")
             try:
                 # Check if branch is in a worktree
                 is_worktree, worktree_path = git.is_worktree(local_branch)
-
-                # Don't skip if it's the current worktree
-                if is_worktree and Path(worktree_path) == current_path:
-                    is_worktree = False
-                    worktree_path = None
-
                 if is_worktree:
-                    console.print(f"Skipping branch {local_branch} - it's used in worktree at {worktree_path}")
+                    console.print(f"[yellow]Skipping branch {local_branch} - it's used in worktree at {worktree_path}[/yellow]")
                     continue
 
                 # Switch to branch and pull
-                if local_branch != current_branch:
-                    git.checkout(local_branch)
-                    branch_switched = True
-                else:
-                    branch_switched = False
+                console.print(f"[blue]Switching to branch {local_branch}...[/blue]")
+                git.checkout(local_branch)
 
                 # Use direct git pull to show the actual output
                 pull_args = ['git', 'pull', remote]
@@ -3124,7 +3160,6 @@ def pull(
                 result = subprocess.run(pull_args, capture_output=True, text=True)
                 if result.returncode == 0:
                     if result.stdout:
-                        # Split the output into lines and print with appropriate colors
                         for line in result.stdout.strip().split('\n'):
                             if line.startswith('Updating'):
                                 console.print(f"[blue]{line}[/blue]")
@@ -3133,11 +3168,9 @@ def pull(
                             elif line.startswith('Already up to date'):
                                 console.print(f"[yellow]{line}[/yellow]")
                             else:
-                                # Handle diff output
                                 if line.startswith('+++') or line.startswith('---'):
-                                    console.print(line)  # Keep original color for file names
+                                    console.print(line)
                                 else:
-                                    # Color all + and - characters in the line
                                     colored_line = ''
                                     for char in line:
                                         if char == '+':
@@ -3158,17 +3191,22 @@ def pull(
                     else:
                         console.print(f"[red]Error pulling branch {local_branch}: {result.stderr}[/red]")
 
-                # Switch back to current branch if we switched away
-                if branch_switched and current_branch != git.get_current_branch():
-                    git.checkout(current_branch)
+                # Switch back to current branch
+                console.print(f"[blue]Switching back to branch {current_branch}...[/blue]")
+                git.checkout(current_branch)
 
             except Exception as e:
                 console.print(f"[red]Error processing branch {local_branch}: {e}[/red]")
+                # Try to switch back to current branch in case of error
+                try:
+                    git.checkout(current_branch)
+                except:
+                    pass
 
-        # Return to original branch
+        # Final check to ensure we're on the original branch
         if current_branch != git.get_current_branch():
+            console.print(f"[blue]Returning to original branch {current_branch}...[/blue]")
             git.checkout(current_branch)
-            console.print(f"[blue]Returned to branch {current_branch}[/blue]")
         return
 
     else:
