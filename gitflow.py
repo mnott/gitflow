@@ -3141,19 +3141,23 @@ def pull(
                         console.print(f"[yellow]Branch {local_branch} has no tracking branch - skipping[/yellow]")
                         continue
 
-                # Use GitWrapper's pull method instead of direct subprocess call
-                try:
-                    result = git.pull(remote, local_branch, rebase)
-                    if "Already up to date" in result:
+                # Use direct git pull to show the actual output
+                pull_args = ['git', 'pull', remote]
+                if rebase:
+                    pull_args.append('--rebase')
+
+                result = subprocess.run(pull_args, text=True)
+                if result.returncode == 0:
+                    if "Already up to date" in result.stdout:
                         console.print(f"Branch {local_branch} is up to date.")
                     else:
                         console.print(f"Pulled changes for branch {local_branch}")
-                except GitCommandError as e:
-                    error_msg = str(e).lower()
+                else:
+                    error_msg = result.stderr.lower()
                     if "no such ref was fetched" in error_msg or "couldn't find remote ref" in error_msg:
                         console.print(f"[yellow]Branch {local_branch} no longer exists on remote - skipping[/yellow]")
                     else:
-                        console.print(f"[red]Error pulling branch {local_branch}: {e}[/red]")
+                        console.print(f"[red]Error pulling branch {local_branch}: {result.stderr}[/red]")
 
             except Exception as e:
                 console.print(f"[red]Error processing branch {local_branch}: {e}[/red]")
@@ -3165,12 +3169,21 @@ def pull(
 
     else:
         # Pull single branch
+        pull_args = ['git', 'pull', remote]
+        if branch:
+            pull_args.append(branch)
+        if rebase:
+            pull_args.append('--rebase')
+
         try:
-            result = git.pull(remote, branch, rebase)
-            if "Already up to date" in result:
-                console.print("Branch is up to date.")
+            result = subprocess.run(pull_args, text=True)
+            if result.returncode == 0:
+                if "Already up to date" in result.stdout:
+                    console.print("Branch is up to date.")
+                else:
+                    console.print("Pulled changes successfully.")
             else:
-                console.print("Pulled changes successfully.")
+                console.print(f"[red]Error pulling changes: {result.stderr}[/red]")
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]")
 
