@@ -3112,6 +3112,9 @@ def pull(
                 # Switch to branch and pull
                 if local_branch != current_branch:
                     git.checkout(local_branch)
+                    branch_switched = True
+                else:
+                    branch_switched = False
 
                 # Use direct git pull to show the actual output
                 pull_args = ['git', 'pull', remote]
@@ -3154,6 +3157,10 @@ def pull(
                         console.print(f"[yellow]Branch {local_branch} no longer exists on remote - skipping[/yellow]")
                     else:
                         console.print(f"[red]Error pulling branch {local_branch}: {result.stderr}[/red]")
+
+                # Switch back to current branch if we switched away
+                if branch_switched and current_branch != git.get_current_branch():
+                    git.checkout(current_branch)
 
             except Exception as e:
                 console.print(f"[red]Error processing branch {local_branch}: {e}[/red]")
