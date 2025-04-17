@@ -3149,11 +3149,22 @@ def pull(
                 result = subprocess.run(pull_args, capture_output=True, text=True)
                 if result.returncode == 0:
                     if result.stdout:
-                        print(result.stdout.strip())  # Print the actual git output
+                        # Split the output into lines and print with appropriate colors
+                        for line in result.stdout.strip().split('\n'):
+                            if line.startswith('Updating'):
+                                console.print(f"[blue]{line}[/blue]")
+                            elif line.startswith('Fast-forward'):
+                                console.print(f"[green]{line}[/green]")
+                            elif line.startswith('Already up to date'):
+                                console.print(f"[yellow]{line}[/yellow]")
+                            elif line.startswith('+') or line.startswith('-'):
+                                console.print(f"[red]{line}[/red]")
+                            else:
+                                console.print(line)
                     if "Already up to date" in result.stdout:
-                        console.print(f"Branch {local_branch} is up to date.")
+                        console.print(f"[yellow]Branch {local_branch} is up to date.[/yellow]")
                     else:
-                        console.print(f"Pulled changes for branch {local_branch}")
+                        console.print(f"[green]Pulled changes for branch {local_branch}[/green]")
                 else:
                     error_msg = result.stderr.lower()
                     if "no such ref was fetched" in error_msg or "couldn't find remote ref" in error_msg:
@@ -3167,7 +3178,7 @@ def pull(
         # Return to original branch
         if current_branch != git.get_current_branch():
             git.checkout(current_branch)
-            console.print(f"Returned to branch {current_branch}")
+            console.print(f"[blue]Returned to branch {current_branch}[/blue]")
 
     else:
         # Pull single branch
@@ -3181,11 +3192,22 @@ def pull(
             result = subprocess.run(pull_args, capture_output=True, text=True)
             if result.returncode == 0:
                 if result.stdout:
-                    print(result.stdout.strip())  # Print the actual git output
+                    # Split the output into lines and print with appropriate colors
+                    for line in result.stdout.strip().split('\n'):
+                        if line.startswith('Updating'):
+                            console.print(f"[blue]{line}[/blue]")
+                        elif line.startswith('Fast-forward'):
+                            console.print(f"[green]{line}[/green]")
+                        elif line.startswith('Already up to date'):
+                            console.print(f"[yellow]{line}[/yellow]")
+                        elif line.startswith('+') or line.startswith('-'):
+                            console.print(f"[red]{line}[/red]")
+                        else:
+                            console.print(line)
                 if "Already up to date" in result.stdout:
-                    console.print("Branch is up to date.")
+                    console.print("[yellow]Branch is up to date.[/yellow]")
                 else:
-                    console.print("Pulled changes successfully.")
+                    console.print("[green]Pulled changes successfully.[/green]")
             else:
                 console.print(f"[red]Error pulling changes: {result.stderr}[/red]")
         except Exception as e:
