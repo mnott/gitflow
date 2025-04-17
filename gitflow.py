@@ -3157,10 +3157,21 @@ def pull(
                                 console.print(f"[green]{line}[/green]")
                             elif line.startswith('Already up to date'):
                                 console.print(f"[yellow]{line}[/yellow]")
-                            elif line.startswith('+') or line.startswith('-'):
-                                console.print(f"[red]{line}[/red]")
                             else:
-                                console.print(line)
+                                # Handle diff output
+                                if line.startswith('+++') or line.startswith('---'):
+                                    console.print(line)  # Keep original color for file names
+                                else:
+                                    # Color all + and - characters in the line
+                                    colored_line = ''
+                                    for char in line:
+                                        if char == '+':
+                                            colored_line += '[green]+[/green]'
+                                        elif char == '-':
+                                            colored_line += '[red]-[/red]'
+                                        else:
+                                            colored_line += char
+                                    console.print(colored_line)
                     if "Already up to date" in result.stdout:
                         console.print(f"[yellow]Branch {local_branch} is up to date.[/yellow]")
                     else:
@@ -3200,10 +3211,21 @@ def pull(
                             console.print(f"[green]{line}[/green]")
                         elif line.startswith('Already up to date'):
                             console.print(f"[yellow]{line}[/yellow]")
-                        elif line.startswith('+') or line.startswith('-'):
-                            console.print(f"[red]{line}[/red]")
                         else:
-                            console.print(line)
+                            # Handle diff output
+                            if line.startswith('+++') or line.startswith('---'):
+                                console.print(line)  # Keep original color for file names
+                            else:
+                                # Color all + and - characters in the line
+                                colored_line = ''
+                                for char in line:
+                                    if char == '+':
+                                        colored_line += '[green]+[/green]'
+                                    elif char == '-':
+                                        colored_line += '[red]-[/red]'
+                                    else:
+                                        colored_line += char
+                                console.print(colored_line)
                 if "Already up to date" in result.stdout:
                     console.print("[yellow]Branch is up to date.[/yellow]")
                 else:
