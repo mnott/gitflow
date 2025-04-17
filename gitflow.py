@@ -3143,13 +3143,23 @@ def pull(
 
                 # Check if there are any changes to pull
                 try:
-                    ahead_behind = git.rev_list('--left-right', '--count', f'{remote}/{local_branch}...HEAD').split()
-                    behind = int(ahead_behind[0])
-                    if behind == 0:
+                    # Get the current branch's HEAD
+                    current_head = subprocess.run(
+                        ['git', 'rev-parse', 'HEAD'],
+                        capture_output=True, text=True
+                    ).stdout.strip()
+
+                    # Get the remote branch's HEAD
+                    remote_head = subprocess.run(
+                        ['git', 'ls-remote', '--heads', remote, local_branch],
+                        capture_output=True, text=True
+                    ).stdout.split()[0]
+
+                    if current_head == remote_head:
                         console.print(f"[yellow]Branch {local_branch} is up to date.[/yellow]")
                         continue
-                except GitCommandError:
-                    # If we can't get ahead/behind info, try to pull anyway
+                except subprocess.CalledProcessError:
+                    # If we can't get the heads, try to pull anyway
                     pass
 
                 # Use direct git pull to show the actual output
