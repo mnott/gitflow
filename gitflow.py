@@ -471,7 +471,7 @@ This means:
 
 """
 
-__version__ = "1.0.20"
+__version__ = "1.0.21"
 
 from collections import defaultdict
 from datetime import datetime, timedelta
