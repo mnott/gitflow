@@ -3113,59 +3113,10 @@ def pull(
                 if local_branch != current_branch:
                     git.checkout(local_branch)
 
-                # Check if branch exists on remote
-                remote_exists = subprocess.run(
-                    ['git', 'ls-remote', '--heads', remote, local_branch],
-                    capture_output=True, text=True
-                ).stdout.strip()
-
-                if not remote_exists:
-                    console.print(f"[yellow]Branch {local_branch} no longer exists on remote - skipping[/yellow]")
-                    continue
-
-                # Check if branch has tracking configured
-                tracking_branch = subprocess.run(
-                    ['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', f'{local_branch}@{{upstream}}'],
-                    capture_output=True, text=True
-                ).stdout.strip()
-
-                if not tracking_branch:
-                    # Try to set up tracking
-                    try:
-                        subprocess.run(
-                            ['git', 'branch', '--set-upstream-to', f'{remote}/{local_branch}', local_branch],
-                            check=True, capture_output=True
-                        )
-                        console.print(f"[yellow]Set up tracking for branch {local_branch}[/yellow]")
-                    except subprocess.CalledProcessError:
-                        console.print(f"[yellow]Branch {local_branch} has no tracking branch - skipping[/yellow]")
-                        continue
-
-                # Check if there are any changes to pull
-                try:
-                    # Get the current branch's HEAD
-                    current_head = subprocess.run(
-                        ['git', 'rev-parse', 'HEAD'],
-                        capture_output=True, text=True
-                    ).stdout.strip()
-
-                    # Get the remote branch's HEAD
-                    remote_head = subprocess.run(
-                        ['git', 'ls-remote', '--heads', remote, local_branch],
-                        capture_output=True, text=True
-                    ).stdout.split()[0]
-
-                    if current_head == remote_head:
-                        console.print(f"[yellow]Branch {local_branch} is up to date.[/yellow]")
-                        continue
-                except subprocess.CalledProcessError:
-                    # If we can't get the heads, try to pull anyway
-                    pass
-
                 # Use direct git pull to show the actual output
                 pull_args = ['git', 'pull', remote]
                 if rebase:
-                    pull_args.append('--rebase')
+                    pull_args.insert(2, '--rebase')
 
                 result = subprocess.run(pull_args, capture_output=True, text=True)
                 if result.returncode == 0:
@@ -3211,6 +3162,7 @@ def pull(
         if current_branch != git.get_current_branch():
             git.checkout(current_branch)
             console.print(f"[blue]Returned to branch {current_branch}[/blue]")
+        return
 
     else:
         # Pull single branch
