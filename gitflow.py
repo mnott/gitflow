@@ -3141,6 +3141,17 @@ def pull(
                         console.print(f"[yellow]Branch {local_branch} has no tracking branch - skipping[/yellow]")
                         continue
 
+                # Check if there are any changes to pull
+                try:
+                    ahead_behind = git.rev_list('--left-right', '--count', f'{remote}/{local_branch}...HEAD').split()
+                    behind = int(ahead_behind[0])
+                    if behind == 0:
+                        console.print(f"[yellow]Branch {local_branch} is up to date.[/yellow]")
+                        continue
+                except GitCommandError:
+                    # If we can't get ahead/behind info, try to pull anyway
+                    pass
+
                 # Use direct git pull to show the actual output
                 pull_args = ['git', 'pull', remote]
                 if rebase:
