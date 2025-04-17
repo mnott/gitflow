@@ -1041,11 +1041,22 @@ class GitWrapper:
 
         # Get gitflow version from the code
         try:
-            with open(Path(__file__).parent.parent / "gitflow.py", "r") as f:
-                for line in f:
-                    if line.startswith("__version__"):
-                        gitflow_version = line.split("=")[1].strip().strip('"\'')
-                        break
+            # Get the path of the executed script (like $0 in bash)
+            script_path = Path(sys.argv[0]).resolve()
+
+            # If the script is gitflow.py, use it directly
+            if script_path.name == "gitflow.py":
+                gitflow_path = script_path
+            else:
+                # Otherwise, we're probably in the client directory
+                gitflow_path = script_path.parent / "gitflow.py"
+
+            if gitflow_path.exists():
+                with open(gitflow_path, "r") as f:
+                    for line in f:
+                        if line.startswith("__version__"):
+                            gitflow_version = line.split("=")[1].strip().strip('"\'')
+                            break
         except Exception:
             pass
 
