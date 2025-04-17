@@ -3123,22 +3123,37 @@ def pull(
                     console.print(f"[yellow]Branch {local_branch} no longer exists on remote - skipping[/yellow]")
                     continue
 
-                pull_args = ['git', 'pull', remote]
-                if rebase:
-                    pull_args.append('--rebase')
+                # Check if branch has tracking configured
+                tracking_branch = subprocess.run(
+                    ['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', f'{local_branch}@{{upstream}}'],
+                    capture_output=True, text=True
+                ).stdout.strip()
 
-                result = subprocess.run(pull_args, capture_output=True, text=True)
-                if result.returncode == 0:
-                    if "Already up to date" in result.stdout:
+                if not tracking_branch:
+                    # Try to set up tracking
+                    try:
+                        subprocess.run(
+                            ['git', 'branch', '--set-upstream-to', f'{remote}/{local_branch}', local_branch],
+                            check=True, capture_output=True
+                        )
+                        console.print(f"[yellow]Set up tracking for branch {local_branch}[/yellow]")
+                    except subprocess.CalledProcessError:
+                        console.print(f"[yellow]Branch {local_branch} has no tracking branch - skipping[/yellow]")
+                        continue
+
+                # Use GitWrapper's pull method instead of direct subprocess call
+                try:
+                    result = git.pull(remote, local_branch, rebase)
+                    if "Already up to date" in result:
                         console.print(f"Branch {local_branch} is up to date.")
                     else:
                         console.print(f"Pulled changes for branch {local_branch}")
-                else:
-                    error_msg = result.stderr.lower()
+                except GitCommandError as e:
+                    error_msg = str(e).lower()
                     if "no such ref was fetched" in error_msg or "couldn't find remote ref" in error_msg:
                         console.print(f"[yellow]Branch {local_branch} no longer exists on remote - skipping[/yellow]")
                     else:
-                        console.print(f"[red]Error pulling branch {local_branch}: {result.stderr}[/red]")
+                        console.print(f"[red]Error pulling branch {local_branch}: {e}[/red]")
 
             except Exception as e:
                 console.print(f"[red]Error processing branch {local_branch}: {e}[/red]")
@@ -3150,21 +3165,12 @@ def pull(
 
     else:
         # Pull single branch
-        pull_args = ['git', 'pull', remote]
-        if branch:
-            pull_args.append(branch)
-        if rebase:
-            pull_args.append('--rebase')
-
         try:
-            result = subprocess.run(pull_args, capture_output=True, text=True)
-            if result.returncode == 0:
-                if "Already up to date" in result.stdout:
-                    console.print("Branch is up to date.")
-                else:
-                    console.print("Pulled changes successfully.")
+            result = git.pull(remote, branch, rebase)
+            if "Already up to date" in result:
+                console.print("Branch is up to date.")
             else:
-                console.print(f"[red]Error pulling changes: {result.stderr}[/red]")
+                console.print("Pulled changes successfully.")
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]")
 
