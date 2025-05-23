@@ -3148,12 +3148,36 @@ def pull(
                     console.print(f"[yellow]Skipping branch {local_branch} - it's used in worktree at {worktree_path}[/yellow]")
                     continue
 
+                # Check if the branch has an upstream or if the remote branch exists
+                branch_status = git.get_branch_status(local_branch)
+                has_upstream = branch_status.get('has_upstream', False)
+
+                # Check if remote branch exists
+                remote_branch_exists = False
+                try:
+                    git.repo.git.ls_remote('--exit-code', '--heads', remote, local_branch)
+                    remote_branch_exists = True
+                except GitCommandError:
+                    remote_branch_exists = False
+
+                if not has_upstream and not remote_branch_exists:
+                    console.print(f"[yellow]Skipping branch {local_branch} - no upstream configured and no remote branch found[/yellow]")
+                    continue
+
                 # Switch to branch and pull
                 console.print(f"[blue]Switching to branch {local_branch}...[/blue]")
                 git.checkout(local_branch)
 
                 # Use direct git pull to show the actual output
                 pull_args = ['git', 'pull', remote]
+
+                # If no upstream is configured but remote branch exists, specify the branch explicitly
+                if not has_upstream and remote_branch_exists:
+                    pull_args.append(local_branch)
+                    # Also set up tracking for future pulls
+                    git.repo.git.branch('--set-upstream-to', f'{remote}/{local_branch}')
+                    console.print(f"[blue]Set up tracking for {local_branch} -> {remote}/{local_branch}[/blue]")
+
                 if rebase:
                     pull_args.insert(2, '--rebase')
 
