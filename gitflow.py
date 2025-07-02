@@ -469,6 +469,205 @@ This means:
 - `gf -v` shows both versions for clarity
 
 
+## Reverting Changes
+
+The revert functionality provides a comprehensive solution for undoing changes in GitFlow-managed
+repositories. This is particularly useful for reverting merged pull requests that may have
+introduced bugs or unwanted changes.
+
+### Understanding Git Revert vs Reset
+
+Git revert creates new commits that undo previous changes, preserving history. This is safer
+than git reset which modifies history. The revert command is particularly powerful for handling
+merge commits in GitFlow workflows.
+
+### Basic Revert Operations
+
+#### Revert a Single Commit
+
+```bash
+# Revert a specific commit on the current branch
+gf revert abc123
+
+# Revert with dry-run to see what would happen
+gf revert abc123 --dry-run
+
+# Revert on all branches containing the commit
+gf revert abc123 --all-branches
+```
+
+#### Interactive Revert
+
+```bash
+# Interactively select which branches to revert on
+gf revert abc123 --interactive
+```
+
+### Advanced Revert Scenarios
+
+#### Latest PR/Merge Revert
+
+One of the most common use cases is reverting the latest merged PR:
+
+```bash
+# Automatically find and revert the latest merge commits on main and develop
+gf revert --latest
+```
+
+This command:
+- Scans main and develop branches for the most recent merge commits
+- Shows you what will be reverted with commit details and source branch info
+- Handles the different commit hashes that result from the same PR being merged into both branches
+
+#### Related Merge Commits
+
+When the same feature branch is merged into both main and develop (common in GitFlow),
+you get different commit hashes for what is logically the same change:
+
+```bash
+# Find and revert all merge commits from the same source branch
+gf revert abc123 --related
+```
+
+This automatically:
+- Detects the source branch that was merged
+- Finds all merge commits across branches that merged this source branch
+- Reverts them appropriately on each branch
+
+#### PR-Based Revert
+
+```bash
+# Revert all merge commits associated with a specific PR number
+gf revert --pr-number 123
+
+# Revert all merge commits from a specific source branch
+gf revert --source-branch feature/new-ui
+```
+
+### Merge Commit Handling
+
+Merge commits have multiple parents, and you need to specify which parent to revert to:
+
+```bash
+# Explicitly specify parent (1 = target branch, 2 = source branch)
+gf revert abc123 --parent 1
+
+# For most GitFlow merges, parent 1 (default) is correct
+gf revert abc123  # Uses parent 1 automatically for merge commits
+```
+
+The tool automatically detects merge commits and:
+- Shows parent commit information
+- Uses parent 1 by default (reverts to the target branch state)
+- Provides clear feedback about which parent is being used
+
+### Safety Features
+
+#### Conflict Detection
+
+```bash
+# Check for conflicts before making changes
+gf revert abc123 --all-branches --dry-run
+```
+
+The dry-run mode:
+- Tests if revert would create conflicts on each branch
+- Shows a detailed plan of what would happen
+- Displays conflicts that would occur
+- Lets you make informed decisions before proceeding
+
+#### Force Mode
+
+```bash
+# Skip branches with conflicts, revert only clean branches
+gf revert abc123 --all-branches --force
+```
+
+### Branch Management
+
+#### Multi-Branch Operations
+
+```bash
+# Revert on specific branches only
+gf revert abc123 --branch main --branch develop
+
+# Revert on all branches containing the commit
+gf revert abc123 --all-branches
+```
+
+#### Pull Request vs Direct Push
+
+```bash
+# Create pull requests instead of pushing directly (safer for protected branches)
+gf revert abc123 --all-branches --pr
+
+# Don't push changes, just make local reverts
+gf revert abc123 --no-push
+```
+
+### Real-World Examples
+
+#### Emergency Hotfix Revert
+
+```bash
+# Someone merged a hotfix that broke production
+# Find and revert the latest merge across all branches
+gf revert --latest --dry-run  # Check what would happen
+gf revert --latest --pr       # Create PRs for review
+```
+
+#### Feature Rollback
+
+```bash
+# A feature was merged but needs to be rolled back
+# Revert PR #456 across all affected branches
+gf revert --pr-number 456 --dry-run
+gf revert --pr-number 456 --all-branches
+```
+
+#### Selective Branch Revert
+
+```bash
+# Only revert on main, not develop (maybe develop needs the change)
+gf revert abc123 --branch main
+```
+
+### Integration with GitFlow
+
+The revert command integrates seamlessly with GitFlow workflows:
+
+1. **Automatic Branch Detection**: Understands GitFlow branch relationships
+2. **Merge Commit Intelligence**: Handles the complexity of merge commits in GitFlow
+3. **Related Commit Finding**: Knows that the same logical change creates different commits on main/develop
+4. **Safe Operations**: Provides dry-run and conflict detection to prevent issues
+5. **PR Integration**: Can create pull requests for protected branch workflows
+
+### Safety Best Practices
+
+1. **Always dry-run first** for complex operations:
+   ```bash
+   gf revert --latest --dry-run
+   ```
+
+2. **Use PR mode** for protected branches:
+   ```bash
+   gf revert abc123 --all-branches --pr
+   ```
+
+3. **Check related commits** when dealing with GitFlow merges:
+   ```bash
+   gf revert abc123 --related --dry-run
+   ```
+
+4. **Test on single branch first** if unsure:
+   ```bash
+   gf revert abc123 --branch develop
+   ```
+
+The revert functionality transforms a typically complex and error-prone operation into
+a safe, intelligent process that understands GitFlow workflows and prevents common mistakes.
+
+
 """
 
 __version__ = "1.0.23"
@@ -3554,6 +3753,366 @@ def cp(
         console.print(f"[red]Error: {e}[/red]")
 
 
+#
+# Revert commits
+#
+@app.command()
+def revert(
+    commit:         Optional[str] = typer.Argument(None,                         help="The commit hash to revert"),
+    all_branches:   bool          = typer.Option  (False, "-a", "--all-branches", help="Revert on all branches containing the commit"),
+    branches:       List[str]     = typer.Option  (None,  "-b", "--branch",      help="Specific branch(es) to revert on"),
+    parent:         Optional[int] = typer.Option  (None,  "-p", "--parent",      help="For merge commits, specify parent (1 or 2, default: 1)"),
+    dry_run:        bool          = typer.Option  (False, "-d", "--dry-run",     help="Show what would be done without making changes"),
+    interactive:    bool          = typer.Option  (False, "-i", "--interactive", help="Interactively select branches to revert on"),
+    create_pr:      bool          = typer.Option  (False,       "--pr",          help="Create pull requests instead of direct push"),
+    no_push:        bool          = typer.Option  (False,       "--no-push",     help="Don't push changes to remote"),
+    force:          bool          = typer.Option  (False, "-f", "--force",       help="Skip branches with conflicts"),
+    latest:         bool          = typer.Option  (False,       "--latest",      help="Revert latest merge commits on main and develop"),
+    related:        bool          = typer.Option  (False,       "--related",     help="Find and revert related merge commits from same source"),
+    pr_number:      Optional[int] = typer.Option  (None,        "--pr-number",   help="Revert all merge commits for specific PR number"),
+    source_branch:  Optional[str] = typer.Option  (None,        "--source-branch", help="Revert all merges from specific source branch")
+):
+    """
+    Revert a commit on one or more branches with GitFlow-aware automation.
+
+    This command can automatically detect merge commits and revert them on the appropriate
+    branches according to GitFlow conventions. It includes safety checks and dry-run capabilities.
+
+    Examples:
+    - Revert a commit on current branch:
+        gf revert abc123
+
+    - Revert on all branches containing the commit:
+        gf revert abc123 --all-branches
+
+    - Dry run to see what would happen:
+        gf revert abc123 --all-branches --dry-run
+
+    - Revert a merge commit (auto-detects and uses parent 1):
+        gf revert abc123
+
+    - Revert merge commit with specific parent:
+        gf revert abc123 --parent 2
+
+    - Interactive branch selection:
+        gf revert abc123 --interactive
+
+    - Create PRs instead of direct push:
+        gf revert abc123 --all-branches --pr
+
+    - Revert on specific branches:
+        gf revert abc123 --branch main --branch develop
+
+    - Revert latest merge commits (GitFlow aware):
+        gf revert --latest
+
+    - Find and revert related merge commits:
+        gf revert abc123 --related
+
+    - Revert by PR number:
+        gf revert --pr-number 123
+
+    - Revert by source branch:
+        gf revert --source-branch feature/new-ui
+    """
+    try:
+        git = GitWrapper()
+
+        # Handle different input modes
+        target_commits = {}  # branch -> commit_hash mapping
+
+        if latest:
+            # Find latest merge commits on main and develop
+            console.print("[blue]Finding latest merge commits on main and develop...[/blue]")
+
+            latest_commits = {}
+            for branch in ['main', 'develop']:
+                try:
+                    # Get the latest merge commit on this branch
+                    log_output = git.log('--oneline', '--merges', '-n', '1', branch)
+                    if log_output.strip():
+                        commit_hash = log_output.split()[0]
+                        latest_commits[branch] = commit_hash
+                        console.print(f"  Latest merge on {branch}: {commit_hash}")
+                    else:
+                        console.print(f"  No merge commits found on {branch}")
+                except GitCommandError:
+                    console.print(f"  Branch {branch} not found")
+
+            if not latest_commits:
+                console.print("[yellow]No latest merge commits found.[/yellow]")
+                return
+
+            target_commits = latest_commits
+
+        elif pr_number:
+            # Find all merge commits for a specific PR
+            console.print(f"[blue]Searching for merge commits from PR #{pr_number}...[/blue]")
+
+            for branch in git.get_branches():
+                try:
+                    # Search for merge commits mentioning the PR number
+                    log_output = git.log('--grep', f'#{pr_number}', '--merges', '--oneline', branch)
+                    for line in log_output.strip().split('\n'):
+                        if line.strip():
+                            commit_hash = line.split()[0]
+                            target_commits[branch] = commit_hash
+                            console.print(f"  Found PR #{pr_number} merge on {branch}: {commit_hash}")
+                except GitCommandError:
+                    continue
+
+        elif source_branch:
+            # Find all merge commits from a specific source branch
+            console.print(f"[blue]Searching for merge commits from {source_branch}...[/blue]")
+
+            for branch in git.get_branches():
+                try:
+                    # Look for merge commits that mention the source branch
+                    log_output = git.log('--grep', source_branch, '--merges', '--oneline', branch)
+                    for line in log_output.strip().split('\n'):
+                        if line.strip():
+                            commit_hash = line.split()[0]
+                            # Verify this is actually from the source branch
+                            source = git.get_merge_commit_source_branch(commit_hash)
+                            if source and source == source_branch:
+                                target_commits[branch] = commit_hash
+                                console.print(f"  Found {source_branch} merge on {branch}: {commit_hash}")
+                except GitCommandError:
+                    continue
+
+        elif related and commit:
+            # Find related merge commits from the same source branch
+            console.print(f"[blue]Finding related merge commits for {commit}...[/blue]")
+
+            # First get the source branch for the provided commit
+            source = git.get_merge_commit_source_branch(commit)
+            if not source:
+                console.print(f"[yellow]Could not determine source branch for {commit}[/yellow]")
+                target_commits = {git.get_current_branch(): commit}
+            else:
+                console.print(f"  Source branch: {source}")
+                # Find all merge commits from this source branch
+                related_commits = git.find_related_merge_commits(commit)
+                target_commits = related_commits
+                for branch, hash in related_commits.items():
+                    console.print(f"  Found related merge on {branch}: {hash}")
+
+        elif commit:
+            # Single commit mode - determine target branches
+            target_branches = []
+
+            if all_branches:
+                target_branches = git.get_branches_containing_commit(commit)
+            elif branches:
+                target_branches = branches
+            elif interactive:
+                available_branches = git.get_branches_containing_commit(commit)
+                target_branches = inquirer.checkbox(
+                    message="Select branches to revert on:",
+                    choices=available_branches
+                ).execute()
+            else:
+                target_branches = [git.get_current_branch()]
+
+            # Set the same commit for all target branches
+            target_commits = {branch: commit for branch in target_branches}
+
+        else:
+            console.print("[red]Error: Must specify a commit hash or use --latest, --pr-number, or --source-branch[/red]")
+            return 1
+
+        if not target_commits:
+            console.print("[yellow]No commits found to revert.[/yellow]")
+            return 0
+
+        # Validate all commits and gather information
+        revert_plan = []
+        has_conflicts = False
+
+        console.print(f"\n[blue]Planning revert operations...[/blue]")
+
+        for branch, commit_hash in target_commits.items():
+            # Validate commit hash
+            commit_info = git.get_commit_info(commit_hash)
+            if not commit_info:
+                console.print(f"[red]Error: Invalid commit hash '{commit_hash}' for branch {branch}[/red]")
+                continue
+
+            # Check if it's a merge commit
+            is_merge, parent_count, parents = git.is_merge_commit(commit_hash)
+
+            # Display commit information
+            console.print(f"\n[blue]Commit to revert on {branch}:[/blue]")
+            console.print(f"  Hash: {commit_info['hash']} ({commit_info['full_hash']})")
+            console.print(f"  Message: {commit_info['message']}")
+            console.print(f"  Author: {commit_info['author']}")
+            console.print(f"  Date: {commit_info['date']}")
+
+            if is_merge:
+                console.print(f"  [yellow]Merge commit with {parent_count} parents:[/yellow]")
+                for i, parent_hash in enumerate(parents, 1):
+                    parent_info = git.get_commit_info(parent_hash)
+                    console.print(f"    Parent {i}: {parent_hash} - {parent_info['message'][:50]}...")
+
+                # Auto-select parent 1 if not specified
+                selected_parent = parent or 1
+                console.print(f"  [green]Using parent {selected_parent} for revert[/green]")
+            else:
+                selected_parent = None
+
+            # Check if revert would be clean
+            can_revert, conflicts = git.can_revert_cleanly(commit_hash, branch, selected_parent)
+
+            plan_item = {
+                'branch': branch,
+                'commit': commit_hash,
+                'commit_info': commit_info,
+                'is_merge': is_merge,
+                'parent': selected_parent,
+                'can_revert': can_revert,
+                'conflicts': conflicts,
+                'action': 'skip' if not can_revert else 'revert'
+            }
+            revert_plan.append(plan_item)
+
+            if can_revert:
+                console.print(f"  ✓ {branch}: Clean revert possible")
+            else:
+                has_conflicts = True
+                console.print(f"  ✗ {branch}: Would create conflicts")
+                if conflicts:
+                    for conflict in conflicts[:3]:  # Show first 3 conflicts
+                        console.print(f"    - {conflict}")
+                    if len(conflicts) > 3:
+                        console.print(f"    ... and {len(conflicts) - 3} more conflicts")
+
+        if not revert_plan:
+            console.print("[red]No valid commits to revert.[/red]")
+            return 1
+
+        # Handle conflicts
+        if has_conflicts and not force:
+            console.print(f"\n[yellow]Some branches would have conflicts during revert.[/yellow]")
+            action = inquirer.select(
+                message="How would you like to proceed?",
+                choices=[
+                    "Skip conflicted branches and continue",
+                    "Abort operation",
+                    "Show detailed conflict information"
+                ]
+            ).execute()
+
+            if action == "Abort operation":
+                console.print("[yellow]Operation aborted.[/yellow]")
+                return 0
+            elif action == "Show detailed conflict information":
+                for item in revert_plan:
+                    if not item['can_revert'] and item['conflicts']:
+                        console.print(f"\n[red]Conflicts in {item['branch']}:[/red]")
+                        for conflict in item['conflicts']:
+                            console.print(f"  - {conflict}")
+                return 0
+
+        # Show dry-run results
+        if dry_run:
+            console.print(f"\n[yellow]DRY RUN - No changes will be made[/yellow]")
+
+            table = Table(title="Revert Plan")
+            table.add_column("Branch", style="cyan")
+            table.add_column("Commit", style="yellow")
+            table.add_column("Message", style="white")
+            table.add_column("Action", style="green")
+
+            for item in revert_plan:
+                action_text = "✓ Revert" if item['can_revert'] else "✗ Skip (conflicts)"
+                action_style = "green" if item['can_revert'] else "red"
+
+                table.add_row(
+                    item['branch'],
+                    item['commit_info']['hash'],
+                    item['commit_info']['message'][:50] + "...",
+                    Text(action_text, style=action_style)
+                )
+
+            console.print(table)
+            console.print(f"\n[blue]Summary:[/blue]")
+            success_count = sum(1 for item in revert_plan if item['can_revert'])
+            skip_count = len(revert_plan) - success_count
+            console.print(f"  - {success_count} branches would be reverted successfully")
+            console.print(f"  - {skip_count} branches would be skipped due to conflicts")
+
+            if not no_push and not create_pr:
+                console.print(f"  - Changes would be pushed to remote")
+            elif create_pr:
+                console.print(f"  - Pull requests would be created")
+
+            return 0
+
+        # Final confirmation
+        revertable_branches = [p['branch'] for p in revert_plan if p['can_revert']]
+        if not revertable_branches:
+            console.print("[yellow]No branches can be reverted cleanly. Operation cancelled.[/yellow]")
+            return 0
+
+        if not inquirer.confirm(
+            message=f"Proceed with reverting on {len(revertable_branches)} branch(es)?",
+            default=False
+        ).execute():
+            console.print("[yellow]Operation cancelled.[/yellow]")
+            return 0
+
+        # Perform the reverts
+        console.print(f"\n[blue]Performing reverts...[/blue]")
+
+        results = []
+        for item in revert_plan:
+            if not item['can_revert']:
+                console.print(f"[yellow]Skipping {item['branch']} due to conflicts[/yellow]")
+                continue
+
+            branch = item['branch']
+            commit_hash = item['commit']
+            parent = item['parent']
+
+            console.print(f"\n[blue]Reverting on {branch}...[/blue]")
+
+            result = git.perform_revert_on_branch(
+                commit=commit_hash,
+                branch=branch,
+                parent=parent,
+                create_pr=create_pr,
+                no_push=no_push
+            )
+
+            results.append(result)
+
+            if result['success']:
+                console.print(f"[green]Successfully reverted {commit_hash} on {branch}[/green]")
+                if result.get('pr_created'):
+                    console.print(f"[green]Created pull request for {branch}[/green]")
+                elif not no_push:
+                    console.print(f"[green]Pushed changes to {branch}[/green]")
+            else:
+                console.print(f"[red]Failed to revert on {branch}: {result.get('error', 'Unknown error')}[/red]")
+
+        # Summary
+        successful_reverts = [r for r in results if r['success']]
+        failed_reverts = [r for r in results if not r['success']]
+
+        console.print(f"\n[blue]Revert Summary:[/blue]")
+        console.print(f"  ✓ {len(successful_reverts)} successful reverts")
+        console.print(f"  ✗ {len(failed_reverts)} failed reverts")
+
+        if failed_reverts:
+            console.print(f"\n[red]Failed branches:[/red]")
+            for result in failed_reverts:
+                console.print(f"  - {result['branch']}: {result.get('error', 'Unknown error')}")
+
+        return 0 if successful_reverts else 1
+
+    except GitCommandError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        return 1
 
 
 LABEL_COLORS = {
