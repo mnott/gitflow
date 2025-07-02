@@ -606,9 +606,271 @@ class GitWrapper:
         """Cherry-pick a specific commit onto the current branch."""
         self.repo.git.cherry_pick(commit)
 
-    def revert(self, commit):
-        """Revert a specific commit."""
-        self.repo.git.revert(commit)
+    def revert(self, commit, parent=None, no_commit=False, no_edit=False):
+        """Revert a commit or merge commit.
+
+        Args:
+            commit (str): The commit hash to revert
+            parent (int, optional): For merge commits, specify which parent to revert to (1 or 2)
+            no_commit (bool): Stage the revert without committing
+            no_edit (bool): Don't open editor for commit message
+        """
+        args = ['revert']
+
+        if no_commit:
+            args.append('--no-commit')
+        if no_edit:
+            args.append('--no-edit')
+        if parent:
+            args.extend(['-m', str(parent)])
+
+        args.append(commit)
+
+        return self.execute_git_command(args)
+
+    def is_merge_commit(self, commit):
+        """Check if a commit is a merge commit.
+
+        Args:
+            commit (str): The commit hash to check
+
+        Returns:
+            tuple: (is_merge, parent_count, parents)
+        """
+        try:
+            # Get commit info
+            commit_obj = self.repo.commit(commit)
+            parents = commit_obj.parents
+            parent_count = len(parents)
+            is_merge = parent_count > 1
+
+            parent_hashes = [p.hexsha[:8] for p in parents] if parents else []
+
+            return is_merge, parent_count, parent_hashes
+        except Exception as e:
+            self.console.print(f"[red]Error checking commit: {e}[/red]")
+            return False, 0, []
+
+    def get_commit_info(self, commit):
+        """Get detailed information about a commit.
+
+        Args:
+            commit (str): The commit hash
+
+        Returns:
+            dict: Commit information including message, author, date, etc.
+        """
+        try:
+            commit_obj = self.repo.commit(commit)
+            return {
+                'hash': commit_obj.hexsha[:8],
+                'full_hash': commit_obj.hexsha,
+                'message': commit_obj.message.strip(),
+                'author': commit_obj.author.name,
+                'date': commit_obj.committed_datetime.strftime('%Y-%m-%d %H:%M:%S'),
+                'parents': [p.hexsha[:8] for p in commit_obj.parents]
+            }
+        except Exception as e:
+            self.console.print(f"[red]Error getting commit info: {e}[/red]")
+            return None
+
+    def get_branches_containing_commit(self, commit):
+        """Get all branches that contain a specific commit.
+
+        Args:
+            commit (str): The commit hash
+
+        Returns:
+            list: List of branch names containing the commit
+        """
+        try:
+            # Get local branches containing the commit
+            local_output = self.repo.git.branch('--contains', commit)
+            local_branches = []
+            for line in local_output.split('\n'):
+                branch = line.strip().lstrip('* ')
+                if branch and not branch.startswith('('):
+                    local_branches.append(branch)
+
+            # Get remote branches containing the commit
+            remote_branches = []
+            try:
+                remote_output = self.repo.git.branch('-r', '--contains', commit)
+                for line in remote_output.split('\n'):
+                    branch = line.strip()
+                    if branch and not branch.startswith('origin/HEAD'):
+                        # Convert origin/branch to just branch for consistency
+                        if branch.startswith('origin/'):
+                            remote_branch = branch[7:]  # Remove 'origin/' prefix
+                            remote_branches.append(remote_branch)
+            except GitCommandError:
+                pass  # Remote might not exist or be accessible
+
+            # Combine and deduplicate
+            all_branches = list(set(local_branches + remote_branches))
+            return sorted(all_branches)
+        except GitCommandError as e:
+            self.console.print(f"[red]Error finding branches: {e}[/red]")
+            return []
+
+    def can_revert_cleanly(self, commit, branch=None, parent=None):
+        """Check if a commit can be reverted cleanly on a branch.
+
+        Args:
+            commit (str): The commit hash to revert
+            branch (str, optional): Branch to check on (current if not specified)
+            parent (int, optional): For merge commits, which parent to use
+
+        Returns:
+            tuple: (can_revert, conflicts)
+        """
+        current_branch = self.get_current_branch()
+
+        try:
+            # Switch to target branch if specified
+            if branch and branch != current_branch:
+                self.checkout(branch)
+
+            # Try a dry run revert
+            try:
+                if parent:
+                    self.execute_git_command(['revert', '--no-commit', '-m', str(parent), commit])
+                else:
+                    self.execute_git_command(['revert', '--no-commit', commit])
+
+                # If we get here, the revert would be clean
+                # Reset to undo the staged revert
+                self.execute_git_command(['reset', '--hard', 'HEAD'])
+                return True, []
+            except GitCommandError as e:
+                # Check if it's a conflict or other error
+                if 'conflict' in str(e).lower():
+                    # Get the conflicted files
+                    try:
+                        status = self.repo.git.status('--porcelain')
+                        conflicts = []
+                        for line in status.split('\n'):
+                            if line.startswith('UU ') or line.startswith('AA '):
+                                conflicts.append(line[3:])
+
+                        # Reset to clean state
+                        self.execute_git_command(['reset', '--hard', 'HEAD'])
+                        return False, conflicts
+                    except:
+                        pass
+
+                return False, [str(e)]
+
+        finally:
+            # Always return to original branch
+            if branch and branch != current_branch:
+                try:
+                    self.checkout(current_branch)
+                except:
+                    pass
+
+        return False, ["Unknown error"]
+
+    def perform_revert_on_branch(self, commit, branch, parent=None, create_pr=False, no_push=False):
+        """Perform a revert on a specific branch.
+
+        Args:
+            commit (str): The commit hash to revert
+            branch (str): The branch to perform revert on
+            parent (int, optional): For merge commits, which parent to use
+            create_pr (bool): Create PR instead of direct push
+            no_push (bool): Skip pushing changes to remote
+
+        Returns:
+            dict: Result information
+        """
+        original_branch = self.get_current_branch()
+        result = {
+            'success': False,
+            'branch': branch,
+            'pr_created': False,
+            'conflicts': [],
+            'error': None
+        }
+
+        try:
+            # Switch to target branch
+            self.checkout(branch)
+
+            # Perform the revert directly (we already checked if it's clean in the planning phase)
+            try:
+                if parent:
+                    self.revert(commit, parent=parent, no_edit=True)
+                else:
+                    self.revert(commit, no_edit=True)
+                result['success'] = True
+            except GitCommandError as e:
+                # Check if it's just "nothing to commit" which means revert succeeded but no changes
+                if "nothing to commit" in str(e).lower():
+                    result['success'] = True
+                    result['error'] = "Revert succeeded but created no changes (already reverted?)"
+                else:
+                    result['error'] = f"Revert failed: {e}"
+                    return result
+
+            # Handle push/PR creation
+            if create_pr:
+                # Create a branch for PR
+                pr_branch = f"revert-{commit[:8]}-{branch}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                self.checkout(pr_branch, create=True)
+
+                if not self.check_network_connection():
+                    result['error'] = "No network connection for PR creation"
+                    return result
+
+                # Push PR branch
+                self.execute_git_command(['push', 'origin', pr_branch])
+
+                # Create PR
+                commit_info = self.get_commit_info(commit)
+                pr_title = f"Revert: {commit_info['message'][:50]}..."
+                pr_body = f"Reverts commit {commit} on {branch}\n\nOriginal commit: {commit_info['message']}"
+
+                try:
+                    result_pr = subprocess.run(
+                        ["gh", "pr", "create", "--base", branch, "--head", pr_branch,
+                         "--title", pr_title, "--body", pr_body],
+                        capture_output=True, text=True, check=True
+                    )
+                    result['pr_created'] = True
+                    self.console.print(f"[green]Created PR to revert {commit} on {branch}[/green]")
+                except subprocess.CalledProcessError as e:
+                    result['error'] = f"Failed to create PR: {e.stderr}"
+
+                # Switch back to original branch
+                self.checkout(branch)
+
+            elif not no_push and self.check_network_connection():
+                # Push directly
+                try:
+                    self.execute_git_command(['push', 'origin', branch])
+                    self.console.print(f"[green]Reverted {commit} on {branch} and pushed[/green]")
+                except GitCommandError as e:
+                    if "protected branch" in str(e):
+                        # Fall back to PR creation
+                        result['error'] = f"Protected branch {branch}, should use --create-pr"
+                    else:
+                        result['error'] = f"Failed to push: {e}"
+            else:
+                self.console.print(f"[green]Reverted {commit} on {branch} (not pushed)[/green]")
+
+        except Exception as e:
+            result['error'] = str(e)
+
+        finally:
+            # Always try to return to original branch
+            try:
+                if self.get_current_branch() != original_branch:
+                    self.checkout(original_branch)
+            except:
+                pass
+
+        return result
 
     def execute_git_command(self, cmd):
         """Execute a git command and return its output."""
@@ -1127,3 +1389,155 @@ class GitWrapper:
         except Exception as e:
             self.console.print(f"[red]Error updating repository version: {e}[/red]")
             raise
+
+    def get_merge_commit_source_branch(self, commit):
+        """Get the source branch that was merged in a merge commit.
+
+        Args:
+            commit (str): The merge commit hash
+
+        Returns:
+            str or None: The source branch name, or None if not determinable
+        """
+        try:
+            commit_obj = self.repo.commit(commit)
+            if len(commit_obj.parents) < 2:
+                return None  # Not a merge commit
+
+            # Get the commit message
+            message = commit_obj.message.strip()
+
+            # Try to extract branch name from common merge message patterns
+            patterns = [
+                r"Merge branch '([^']+)'",
+                r"Merge pull request #\d+ from [^/]+/([^\s]+)",
+                r"Merge remote-tracking branch 'origin/([^']+)'",
+                r"Merge '([^']+)' into",
+            ]
+
+            for pattern in patterns:
+                match = re.search(pattern, message)
+                if match:
+                    return match.group(1)
+
+            return None
+        except Exception:
+            return None
+
+    def find_related_merge_commits(self, commit, branches=None):
+        """Find merge commits across branches that merged the same source branch.
+
+        Args:
+            commit (str): A merge commit hash to find related commits for
+            branches (list, optional): Branches to search in
+
+        Returns:
+            dict: Dictionary mapping branch names to merge commit hashes
+        """
+        source_branch = self.get_merge_commit_source_branch(commit)
+        if not source_branch:
+            return {}
+
+        if branches is None:
+            branches = ['main', 'develop']
+
+        related_commits = {}
+
+        for branch in branches:
+            try:
+                # Get merge commits in this branch
+                merge_commits = self.repo.git.log(
+                    branch, '--merges', '--oneline', '--format=%H'
+                ).split('\n')
+
+                for merge_commit in merge_commits:
+                    if not merge_commit.strip():
+                        continue
+
+                    merge_source = self.get_merge_commit_source_branch(merge_commit.strip())
+                    if merge_source == source_branch:
+                        related_commits[branch] = merge_commit.strip()
+                        break  # Take the first (most recent) match
+
+            except GitCommandError:
+                continue
+
+        return related_commits
+
+    def get_latest_merge_commit_per_branch(self, branches=None):
+        """Get the latest merge commit on each specified branch.
+
+        Args:
+            branches (list, optional): Branches to check (default: main, develop)
+
+        Returns:
+            dict: Dictionary mapping branch names to latest merge commit info
+        """
+        if branches is None:
+            branches = ['main', 'develop']
+
+        latest_merges = {}
+
+        for branch in branches:
+            try:
+                # Get the most recent merge commit
+                merge_commit = self.repo.git.log(
+                    branch, '--merges', '-1', '--format=%H'
+                ).strip()
+
+                if merge_commit:
+                    commit_info = self.get_commit_info(merge_commit)
+                    if commit_info:
+                        latest_merges[branch] = {
+                            'hash': merge_commit,
+                            'info': commit_info,
+                            'source_branch': self.get_merge_commit_source_branch(merge_commit)
+                        }
+
+            except GitCommandError:
+                continue
+
+        return latest_merges
+
+    def find_pr_merge_commits(self, pr_number=None, source_branch=None):
+        """Find merge commits related to a specific PR or source branch.
+
+        Args:
+            pr_number (int, optional): PR number to search for
+            source_branch (str, optional): Source branch to search for
+
+        Returns:
+            dict: Dictionary mapping branch names to merge commit hashes
+        """
+        branches = ['main', 'develop']
+        pr_commits = {}
+
+        for branch in branches:
+            try:
+                merge_commits = self.repo.git.log(
+                    branch, '--merges', '--oneline', '--format=%H:%s'
+                ).split('\n')
+
+                for line in merge_commits:
+                    if not line.strip():
+                        continue
+
+                    commit_hash, commit_message = line.split(':', 1)
+
+                    # Check for PR number match
+                    if pr_number:
+                        if f"#{pr_number}" in commit_message:
+                            pr_commits[branch] = commit_hash.strip()
+                            break
+
+                    # Check for source branch match
+                    if source_branch:
+                        merge_source = self.get_merge_commit_source_branch(commit_hash.strip())
+                        if merge_source == source_branch:
+                            pr_commits[branch] = commit_hash.strip()
+                            break
+
+            except GitCommandError:
+                continue
+
+        return pr_commits
