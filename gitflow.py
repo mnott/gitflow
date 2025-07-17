@@ -1174,8 +1174,8 @@ def finish(
 
         # Handle commit messages if provided
         if messages:
-            # Combine messages and commit changes
-            combined_message = combine_messages(messages)
+            # Combine messages and commit changes with proper line wrapping
+            combined_message = get_manual_commit_message_from_list(messages)
             git_wrapper.add('.')
             git_wrapper.commit(combined_message)
             console.print(f"[green]Committed changes with message: {combined_message.split(chr(10))[0]}[/green]")
@@ -2331,7 +2331,7 @@ def commit(
         if git_wrapper.is_dirty(untracked_files=True):
             if add_all or inquirer.confirm(message="Do you want to stage all changes?", default=True).execute():
                 git_wrapper.add(all=True)
-                wip_message = combine_messages(messages) if messages else "WIP: Changes to be squashed"
+                wip_message = get_manual_commit_message_from_list(messages) if messages else "WIP: Changes to be squashed"
                 git_wrapper.commit(wip_message)
                 console.print("[green]Auto-committed changes for squashing[/green]")
 
@@ -3310,7 +3310,7 @@ def push(
         if git_wrapper.is_dirty(untracked_files=True):
             if messages:
                 # Commit changes with provided messages
-                full_message = combine_messages(messages)
+                full_message = get_manual_commit_message_from_list(messages)
                 if body:
                     full_message += "\n\n" + split_message_body(body)
                 git_wrapper.add('.')
