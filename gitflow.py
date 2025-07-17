@@ -2624,7 +2624,13 @@ def get_manual_commit_message(message, body):
 # Helper Function to split a commit message body at the 72nd character
 #
 def split_message_body(body: str) -> str:
-    """Splits the commit message body at the 72nd character, avoiding word splits."""
+    """Splits the commit message body at the 72nd character, avoiding word splits.
+
+    Also converts literal \\n sequences to actual newlines for proper formatting.
+    """
+    # Convert literal \n sequences to actual newlines
+    body = body.replace('\\n', '\n')
+
     lines = []
     for paragraph in body.split('\n'):
         while len(paragraph) > 72:
