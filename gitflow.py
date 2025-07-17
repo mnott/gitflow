@@ -82,6 +82,18 @@ Any branch type can be finished by
 ./gitflow.py finish
 ```
 
+To commit changes before finishing:
+
+```bash
+./gitflow.py finish -m "Complete feature implementation"
+```
+
+For multi-paragraph commit messages, you can use multiple `-m` options:
+
+```bash
+./gitflow.py finish -m "Complete user dashboard" -m "Added charts and analytics" -m "Improved responsive design"
+```
+
 
 ## Hotfix Branches
 
@@ -212,6 +224,12 @@ To commit the current changes with a specified message, run:
 ./gitflow.py commit -m "Updated gitflow script"
 ```
 
+For multi-paragraph commit messages, you can use multiple `-m` options:
+
+```bash
+./gitflow.py commit -m "Fix authentication bug" -m "Updated login validation" -m "Added comprehensive error handling"
+```
+
 If you do not specify a commit message, you will be prompted to enter one,
 and you'll also be able to use the AI to generate one.
 
@@ -222,6 +240,18 @@ To push the committed changes to the remote repository, run:
 
 ```bash
 ./gitflow.py push feature/new-feature
+```
+
+To commit and push changes with a message in one step:
+
+```bash
+./gitflow.py push -m "Deploy new feature"
+```
+
+For multi-paragraph commit messages, you can use multiple `-m` options:
+
+```bash
+./gitflow.py push -m "Deploy new feature" -m "Includes performance improvements" -m "Added comprehensive error handling"
 ```
 
 This will optionally allow you to stage and commit all current changes.
@@ -1109,9 +1139,20 @@ def start(
 @app.command()
 def finish(
     delete: bool = typer.Option(True, "-d", "--delete", help="Delete the branch after finishing"),
-    keep_local: bool = typer.Option(False, "-k", "--keep-local", help="Keep the local branch after finishing")
+    keep_local: bool = typer.Option(False, "-k", "--keep-local", help="Keep the local branch after finishing"),
+    messages: List[str] = typer.Option([], "-m", "--message", help="Commit message(s) before finishing (can be used multiple times)")
 ):
-    """Finish the current branch according to gitflow conventions."""
+    """
+    Finish the current branch according to gitflow conventions.
+
+    If --message is provided, changes will be committed before finishing.
+    Multiple -m options can be used to create multi-paragraph commit messages.
+
+    Examples:
+        gf finish  # Finish current branch
+        gf finish -m "Fix bug" # Commit and finish
+        gf finish -m "Fix bug" -m "Detailed explanation" # Multi-paragraph commit and finish
+    """
     git = GitWrapper()
     current_branch = git.get_current_branch()
 
@@ -1131,7 +1172,14 @@ def finish(
             console.print(f"[red]Error: Current branch '{current_branch}' is not a feature, hotfix, or release branch[/red]")
             return
 
-        if not handle_unstaged_changes(branch_type):
+        # Handle commit messages if provided
+        if messages:
+            # Combine messages and commit changes
+            combined_message = combine_messages(messages)
+            git_wrapper.add('.')
+            git_wrapper.commit(combined_message)
+            console.print(f"[green]Committed changes with message: {combined_message.split(chr(10))[0]}[/green]")
+        elif not handle_unstaged_changes(branch_type):
             return
 
         offline = not git_wrapper.check_network_connection()
@@ -2255,7 +2303,7 @@ def unstash(
 #
 @app.command()
 def commit(
-    message:     Optional[str] = typer.Option  (None,  "-m", "--message",     help="The commit message"),
+    messages:    List[str]     = typer.Option  ([],    "-m", "--message",     help="Commit message(s) (can be used multiple times)"),
     body:        Optional[str] = typer.Option  (None,  "-b", "--body",        help="The commit message body"),
     add_all:     bool          = typer.Option  (False, "-a", "--all",         help="Add all changes before committing"),
     interactive: bool          = typer.Option  (False, "-i", "--interactive", help="Use interactive mode for commit message"),
@@ -2276,14 +2324,14 @@ def commit(
     """
     try:
         if not squash:
-            _commit(message, body, add_all, interactive, False, files)
+            _commit(messages, body, add_all, interactive, False, files)
             return
 
         # First handle any unstaged changes
         if git_wrapper.is_dirty(untracked_files=True):
             if add_all or inquirer.confirm(message="Do you want to stage all changes?", default=True).execute():
                 git_wrapper.add(all=True)
-                wip_message = message if message else "WIP: Changes to be squashed"
+                wip_message = combine_messages(messages) if messages else "WIP: Changes to be squashed"
                 git_wrapper.commit(wip_message)
                 console.print("[green]Auto-committed changes for squashing[/green]")
 
@@ -2352,7 +2400,7 @@ def commit(
         console.print("[green]Successfully squashed commits[/green]")
 
         # Call internal commit function with interactive=True for squash
-        _commit(message, body, True, True, False, files)  # Force interactive for squash
+        _commit(messages, body, True, True, False, files)  # Force interactive for squash
 
     except GitCommandError as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -2364,7 +2412,7 @@ def commit(
 # Commit changes. Made internal to handle squash option.
 #
 def _commit(
-    message:     Optional[str] = None,
+    messages:    List[str]    = None,
     body:        Optional[str] = None,
     add_all:     bool         = False,
     interactive: bool         = False,
@@ -2400,7 +2448,7 @@ def _commit(
                     return
 
                 # Generate or use provided commit message
-                if not message:
+                if not messages:
                     console.print("[blue]Analyzing all changes for commit message...[/blue]")
                     # Get all commits between base and HEAD to analyze
                     commits = git_wrapper.log(f"{base_commit}..HEAD", "--pretty=format:%H").splitlines()
@@ -2411,7 +2459,7 @@ def _commit(
                         # If no commits, analyze the current changes
                         full_commit_message = explain(None, None, None, None, None, False, False, False, None, False, False)
                 else:
-                    full_commit_message = get_manual_commit_message(message, body)
+                    full_commit_message = get_manual_commit_message_from_list(messages)
 
                 if not full_commit_message or not full_commit_message.strip():
                     console.print("[red]Error: Empty commit message[/red]")
@@ -2449,10 +2497,12 @@ def _commit(
                 return
 
             api_key = git_wrapper.get_git_metadata("openai.apikey")
-            if api_key and (interactive or not message):
-                full_commit_message = get_commit_message(message, body)
+            if api_key and (interactive or not messages):
+                # For AI generation, use the first message if available or None
+                first_message = messages[0] if messages else None
+                full_commit_message = get_commit_message(first_message, body)
             else:
-                full_commit_message = get_manual_commit_message(message, body)
+                full_commit_message = get_manual_commit_message_from_list(messages)
 
             # Show the full commit message and ask for confirmation
             confirm = True
@@ -2497,6 +2547,61 @@ def get_commit_message(message=None, body=None):
         return get_commit_message(message, body)  # Recursively call the function if the user doesn't confirm
 
     return full_commit_message
+
+def combine_messages(messages: List[str]) -> str:
+    """
+    Combine multiple messages into a single commit message with double newlines.
+    Similar to how Git CLI handles multiple -m options.
+
+    Args:
+        messages: List of message strings
+
+    Returns:
+        Combined message string with double newlines between messages
+    """
+    if not messages:
+        return ""
+
+    # Filter out empty messages
+    non_empty_messages = [msg.strip() for msg in messages if msg.strip()]
+
+    if not non_empty_messages:
+        return ""
+
+    # Join messages with double newlines like Git CLI
+    return "\n\n".join(non_empty_messages)
+
+
+def get_manual_commit_message_from_list(messages: List[str]) -> str:
+    """
+    Get a commit message from a list of messages, with proper formatting.
+
+    Args:
+        messages: List of message strings
+
+    Returns:
+        Formatted commit message string
+    """
+    if not messages:
+        return ""
+
+    combined = combine_messages(messages)
+
+    # Apply line wrapping at 72 characters for the body
+    lines = combined.split('\n')
+    formatted_lines = []
+
+    for i, line in enumerate(lines):
+        if i == 0:  # First line (subject) - keep as is
+            formatted_lines.append(line)
+        else:
+            if line.strip():  # Non-empty line
+                formatted_lines.append(split_message_body(line))
+            else:  # Empty line
+                formatted_lines.append(line)
+
+    return '\n'.join(formatted_lines)
+
 
 def get_manual_commit_message(message, body):
     if not message:
@@ -3168,7 +3273,7 @@ def merge(
 def push(
     remote: str = typer.Option("origin", help="Remote to push to"),
     branch: Optional[str] = typer.Argument(None, help="Branch to push (defaults to current)"),
-    message: Optional[str] = typer.Option(None, "-m", "--message", help="Commit message before pushing"),
+    messages: List[str] = typer.Option([], "-m", "--message", help="Commit message(s) before pushing (can be used multiple times)"),
     body: Optional[str] = typer.Option(None, "-b", "--body", help="Commit message body"),
     force: bool = typer.Option(False, "-f", "--force", help="Force push")
 ):
@@ -3203,9 +3308,11 @@ def push(
 
         # Handle uncommitted changes
         if git_wrapper.is_dirty(untracked_files=True):
-            if message:
-                # Commit changes with provided message
-                full_message = get_commit_message(message, body)
+            if messages:
+                # Commit changes with provided messages
+                full_message = combine_messages(messages)
+                if body:
+                    full_message += "\n\n" + split_message_body(body)
                 git_wrapper.add('.')
                 git_wrapper.commit(full_message)
                 console.print("[green]Changes committed.[/green]")
