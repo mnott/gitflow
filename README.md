@@ -80,6 +80,18 @@ Any branch type can be finished by
 ./gitflow.py finish
 ```
 
+To commit changes before finishing:
+
+```bash
+./gitflow.py finish -m "Complete feature implementation"
+```
+
+For multi-paragraph commit messages, you can use multiple `-m` options:
+
+```bash
+./gitflow.py finish -m "Complete user dashboard" -m "Added charts and analytics" -m "Improved responsive design"
+```
+
 
 ## Hotfix Branches
 
@@ -210,6 +222,12 @@ To commit the current changes with a specified message, run:
 ./gitflow.py commit -m "Updated gitflow script"
 ```
 
+For multi-paragraph commit messages, you can use multiple `-m` options:
+
+```bash
+./gitflow.py commit -m "Fix authentication bug" -m "Updated login validation" -m "Added comprehensive error handling"
+```
+
 If you do not specify a commit message, you will be prompted to enter one,
 and you'll also be able to use the AI to generate one.
 
@@ -220,6 +238,18 @@ To push the committed changes to the remote repository, run:
 
 ```bash
 ./gitflow.py push feature/new-feature
+```
+
+To commit and push changes with a message in one step:
+
+```bash
+./gitflow.py push -m "Deploy new feature"
+```
+
+For multi-paragraph commit messages, you can use multiple `-m` options:
+
+```bash
+./gitflow.py push -m "Deploy new feature" -m "Includes performance improvements" -m "Added comprehensive error handling"
 ```
 
 This will optionally allow you to stage and commit all current changes.
@@ -458,8 +488,7 @@ When running `gf finish` on a release branch:
 
 1. The version is extracted from the release branch name (e.g., `release/v1.8.40` → `1.8.40`)
 2. The `.version` file is updated with this version number
-3. If in the gitflow repository (detected by presence of `client/gitwrapper.py` and other files), `__version__` in `gitflow.py` is also 
-updated
+3. If in the gitflow repository (detected by presence of `client/gitwrapper.py` and other files), `__version__` in `gitflow.py` is also updated
 4. Changes are committed and merged into `main` and `develop`
 
 This means:
