@@ -50,6 +50,21 @@ explaining files and commits, you can run the following command:
 ./gitflow.py config-ai
 ```
 
+## Post-Pull Command Configuration
+
+You can configure a command to be executed automatically after running `gf pull -a`:
+
+```bash
+# Configure a post-pull command
+./gitflow.py config --post-pull 'ssh tc "cd /opt/data/tenantcleanup && PYTHONPATH=/opt/data/tenantcleanup:/opt/data/tenantcleanup/ai gf pull -a"'
+
+# Remove the post-pull command
+./gitflow.py config --post-pull ""
+```
+
+The post-pull command is stored in `.git/config` as `gitflow.postpullcommand` and will be executed
+after all branches have been pulled when using `gf pull -a`.
+
 
 # Usage
 
@@ -983,13 +998,33 @@ def config(
     token:    Optional[str] = typer.Option(None,                  "-t", "--token",    help="Your GitHub token"),
     email:    Optional[str] = typer.Option(None,                  "-e", "--email",    help="Your email for git config"),
     name:     Optional[str] = typer.Option(None,                  "-n", "--name",     help="Your name for git config"),
-    host:     Optional[str] = typer.Option("github.wdf.sap.corp", "-h", "--host",     help="GitHub host", show_default=True)
+    host:     Optional[str] = typer.Option("github.wdf.sap.corp", "-h", "--host",     help="GitHub host", show_default=True),
+    post_pull_cmd: Optional[str] = typer.Option(None,             "-p", "--post-pull", help="Command to execute after 'gf pull -a'")
 ):
     """
     Configure Git and GitHub settings.
 
     Prompts for username, token, email, name, and host if not provided via CLI options.
+    Can also configure a post-pull command that will be executed after 'gf pull -a'.
     """
+    # Handle post-pull command configuration if specified
+    if post_pull_cmd is not None:
+        git = GitWrapper()
+        if post_pull_cmd == "":
+            # Empty string means remove the config
+            try:
+                subprocess.run(["git", "config", "--unset", "gitflow.postpullcommand"], check=True, capture_output=True)
+                console.print("[green]Post-pull command configuration removed.[/green]")
+            except subprocess.CalledProcessError:
+                console.print("[yellow]No post-pull command was configured.[/yellow]")
+        else:
+            git.set_git_metadata("gitflow.postpullcommand", post_pull_cmd)
+            console.print(f"[green]Post-pull command configured: {post_pull_cmd}[/green]")
+        
+        # If only post-pull command was specified, exit early
+        if username is None and token is None and email is None and name is None:
+            return
+    
     if username is None:
         username = inquirer.text(message="Enter your GitHub username     :").execute()
 
@@ -3543,6 +3578,27 @@ def pull(
         if current_branch != git.get_current_branch():
             console.print(f"[blue]Returning to original branch {current_branch}...[/blue]")
             git.checkout(current_branch)
+        
+        # Execute post-pull command if configured
+        post_pull_cmd = git.get_git_metadata("gitflow.postpullcommand")
+        if post_pull_cmd:
+            console.print(f"[blue]Executing post-pull command: {post_pull_cmd}[/blue]")
+            try:
+                result = subprocess.run(post_pull_cmd, shell=True, capture_output=True, text=True)
+                if result.returncode == 0:
+                    if result.stdout:
+                        console.print(f"[green]Post-pull command output:[/green]")
+                        for line in result.stdout.strip().split('\n'):
+                            console.print(f"  {line}")
+                    console.print(f"[green]Post-pull command completed successfully[/green]")
+                else:
+                    console.print(f"[red]Post-pull command failed with exit code {result.returncode}[/red]")
+                    if result.stderr:
+                        console.print(f"[red]Error output:[/red]")
+                        for line in result.stderr.strip().split('\n'):
+                            console.print(f"  {line}")
+            except Exception as e:
+                console.print(f"[red]Failed to execute post-pull command: {e}[/red]")
         return
 
     else:
