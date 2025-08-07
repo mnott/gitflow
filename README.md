@@ -48,6 +48,21 @@ explaining files and commits, you can run the following command:
 ./gitflow.py config-ai
 ```
 
+## Post-Pull Command Configuration
+
+You can configure a command to be executed automatically after running `gf pull -a`:
+
+```bash
+# Configure a post-pull command
+./gitflow.py config --post-pull 'ssh tc "cd /opt/data/tenantcleanup && PYTHONPATH=/opt/data/tenantcleanup:/opt/data/tenantcleanup/ai gf pull -a"'
+
+# Remove the post-pull command
+./gitflow.py config --post-pull ""
+```
+
+The post-pull command is stored in `.git/config` as `gitflow.postpullcommand` and will be executed
+after all branches have been pulled when using `gf pull -a`.
+
 
 # Usage
 
