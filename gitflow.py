@@ -2531,8 +2531,12 @@ def _commit(
                 console.print("[yellow]No changes to commit.[/yellow]")
                 return
 
-            api_key = git_wrapper.get_git_metadata("openai.apikey")
-            if api_key and (interactive or not messages):
+            # Check if any AI provider is configured
+            git_config = GitConfig()
+            available_providers = git_config.get_available_providers()
+            has_ai_provider = len(available_providers) > 0
+            
+            if has_ai_provider and (interactive or not messages):
                 # For AI generation, use the first message if available or None
                 first_message = messages[0] if messages else None
                 full_commit_message = get_commit_message(first_message, body)
