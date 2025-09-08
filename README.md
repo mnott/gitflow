@@ -63,6 +63,16 @@ You can configure a command to be executed automatically after running `gf pull 
 The post-pull command is stored in `.git/config` as `gitflow.postpullcommand` and will be executed
 after all branches have been pulled when using `gf pull -a`.
 
+To skip the post-pull command execution (for local-only operations), use the `-l`/`--local` flag:
+
+```bash
+# Pull all branches without executing post-pull command
+./gitflow.py pull -a -l
+
+# Pull current branch without executing post-pull command  
+./gitflow.py pull -l
+```
+
 
 # Usage
 

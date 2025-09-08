@@ -65,6 +65,16 @@ You can configure a command to be executed automatically after running `gf pull 
 The post-pull command is stored in `.git/config` as `gitflow.postpullcommand` and will be executed
 after all branches have been pulled when using `gf pull -a`.
 
+To skip the post-pull command execution (for local-only operations), use the `-l`/`--local` flag:
+
+```bash
+# Pull all branches without executing post-pull command
+./gitflow.py pull -a -l
+
+# Pull current branch without executing post-pull command  
+./gitflow.py pull -l
+```
+
 
 # Usage
 
@@ -999,13 +1009,14 @@ def config(
     email:    Optional[str] = typer.Option(None,                  "-e", "--email",    help="Your email for git config"),
     name:     Optional[str] = typer.Option(None,                  "-n", "--name",     help="Your name for git config"),
     host:     Optional[str] = typer.Option("github.wdf.sap.corp", "-h", "--host",     help="GitHub host", show_default=True),
-    post_pull_cmd: Optional[str] = typer.Option(None,             "-p", "--post-pull", help="Command to execute after 'gf pull -a'")
+    post_pull_cmd: Optional[str] = typer.Option(None,             "-p", "--post-pull", help="Command to execute after 'gf pull -a' (use 'gf pull -a -l' to skip)")
 ):
     """
     Configure Git and GitHub settings.
 
     Prompts for username, token, email, name, and host if not provided via CLI options.
     Can also configure a post-pull command that will be executed after 'gf pull -a'.
+    Use 'gf pull -a -l' to skip post-pull command execution.
     """
     # Handle post-pull command configuration if specified
     if post_pull_cmd is not None:
@@ -2531,8 +2542,12 @@ def _commit(
                 console.print("[yellow]No changes to commit.[/yellow]")
                 return
 
-            api_key = git_wrapper.get_git_metadata("openai.apikey")
-            if api_key and (interactive or not messages):
+            # Check if any AI provider is configured
+            git_config = GitConfig()
+            available_providers = git_config.get_available_providers()
+            has_ai_provider = len(available_providers) > 0
+            
+            if has_ai_provider and (interactive or not messages):
                 # For AI generation, use the first message if available or None
                 first_message = messages[0] if messages else None
                 full_commit_message = get_commit_message(first_message, body)
@@ -3428,9 +3443,12 @@ def pull(
     branch:       Optional[str] = typer.Option(None,                    help="The branch to pull. If not specified, pulls the current branch"),
     all_branches: bool          = typer.Option(False,"-a",  "--all",    help="Pull all branches"),
     prune:        bool          = typer.Option(False,"-p",  "--prune",  help="Prune remote-tracking branches no longer on remote"),
-    rebase:       bool          = typer.Option(False,"-r",  "--rebase", help="Rebase the current branch on top of the upstream branch after fetching")
+    rebase:       bool          = typer.Option(False,"-r",  "--rebase", help="Rebase the current branch on top of the upstream branch after fetching"),
+    local_only:   bool          = typer.Option(False,"-l",  "--local",  help="Skip post-pull command execution (local only)")
 ):
-    """Pull changes from the remote repository."""
+    """Pull changes from the remote repository. 
+    
+    Use -l/--local to skip executing any configured post-pull commands."""
     git = GitWrapper()
 
     # Fetch changes first
@@ -3579,26 +3597,29 @@ def pull(
             console.print(f"[blue]Returning to original branch {current_branch}...[/blue]")
             git.checkout(current_branch)
         
-        # Execute post-pull command if configured
+        # Execute post-pull command if configured and not local-only
         post_pull_cmd = git.get_git_metadata("gitflow.postpullcommand")
         if post_pull_cmd:
-            console.print(f"[blue]Executing post-pull command: {post_pull_cmd}[/blue]")
-            try:
-                result = subprocess.run(post_pull_cmd, shell=True, capture_output=True, text=True)
-                if result.returncode == 0:
-                    if result.stdout:
-                        console.print(f"[green]Post-pull command output:[/green]")
-                        for line in result.stdout.strip().split('\n'):
-                            console.print(f"  {line}")
-                    console.print(f"[green]Post-pull command completed successfully[/green]")
-                else:
-                    console.print(f"[red]Post-pull command failed with exit code {result.returncode}[/red]")
-                    if result.stderr:
-                        console.print(f"[red]Error output:[/red]")
-                        for line in result.stderr.strip().split('\n'):
-                            console.print(f"  {line}")
-            except Exception as e:
-                console.print(f"[red]Failed to execute post-pull command: {e}[/red]")
+            if not local_only:
+                console.print(f"[blue]Executing post-pull command: {post_pull_cmd}[/blue]")
+                try:
+                    result = subprocess.run(post_pull_cmd, shell=True, capture_output=True, text=True)
+                    if result.returncode == 0:
+                        if result.stdout:
+                            console.print(f"[green]Post-pull command output:[/green]")
+                            for line in result.stdout.strip().split('\n'):
+                                console.print(f"  {line}")
+                        console.print(f"[green]Post-pull command completed successfully[/green]")
+                    else:
+                        console.print(f"[red]Post-pull command failed with exit code {result.returncode}[/red]")
+                        if result.stderr:
+                            console.print(f"[red]Error output:[/red]")
+                            for line in result.stderr.strip().split('\n'):
+                                console.print(f"  {line}")
+                except Exception as e:
+                    console.print(f"[red]Failed to execute post-pull command: {e}[/red]")
+            else:
+                pass  # Skip post-pull command silently
         return
 
     else:
