@@ -3619,7 +3619,7 @@ def pull(
                 except Exception as e:
                     console.print(f"[red]Failed to execute post-pull command: {e}[/red]")
             else:
-                console.print(f"[yellow]Skipping post-pull command (local-only mode): {post_pull_cmd}[/yellow]")
+                pass  # Skip post-pull command silently
         return
 
     else:
