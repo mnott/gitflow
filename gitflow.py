@@ -84,6 +84,28 @@ To get help about the script, call it with the `--help` option:
 ./gitflow.py --help
 ```
 
+## Accepting Defaults for All Prompts
+
+The `-y`/`--yes` flag can be used with any command to automatically accept default values for all interactive prompts. This is particularly useful for automation or when you want to speed up common operations.
+
+```bash
+# Commit changes without any prompts - accepts defaults for:
+# - Stage all changes (default: yes)
+# - Use AI to generate commit message (default: yes)  
+# - Edit the generated message (default: no)
+# - Use the final commit message (default: yes)
+./gitflow.py -y commit
+
+# Stage files without being prompted
+./gitflow.py -y stage
+
+# Other examples
+./gitflow.py -y finish -m "Complete feature"
+./gitflow.py -y push
+```
+
+The `-y` flag respects the default values that would normally be suggested in the interactive prompts, making it safe to use in most scenarios while significantly reducing the number of confirmations needed.
+
 ## Starting and Finishing Branches
 
 ### Starting a Branch
@@ -783,6 +805,11 @@ def version_callback(value: bool):
             console.print(f"Repository version: {repo_version}")
         raise typer.Exit()
 
+def yes_callback(value: bool):
+    global YES_TO_ALL
+    if value:
+        YES_TO_ALL = True
+
 @app.callback()
 def main(
     version: bool = typer.Option(
@@ -790,10 +817,50 @@ def main(
         help="Show the version and exit",
         callback=version_callback,
         is_eager=True
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y",
+        help="Accept defaults for all prompts",
+        callback=yes_callback,
+        is_eager=True
     )
 ):
     """GitFlow - A tool for managing Git workflows."""
     pass
+
+# Global variable to track --yes flag
+YES_TO_ALL = False
+
+def confirm_or_default(message: str, default: bool = True) -> bool:
+    """
+    Show a confirmation prompt or return the default value if --yes flag is used.
+    
+    Args:
+        message: The confirmation message to show
+        default: The default value to return if --yes is used or user hits enter
+        
+    Returns:
+        bool: The user's choice or the default if --yes flag is set
+    """
+    if YES_TO_ALL:
+        return default
+    return inquirer.confirm(message=message, default=default).execute()
+
+def select_or_default(message: str, choices: list, default_index: int = 0):
+    """
+    Show a selection prompt or return the default choice if --yes flag is used.
+    
+    Args:
+        message: The selection message to show
+        choices: List of choices to select from
+        default_index: Index of the default choice to return if --yes is used
+        
+    Returns:
+        The user's choice or the default choice if --yes flag is set
+    """
+    if YES_TO_ALL:
+        return choices[default_index]
+    return inquirer.select(message=message, choices=choices).execute()
 
 # Initialize the GitWrapper
 git_wrapper = GitWrapper()
@@ -1768,14 +1835,15 @@ def checkout(
         if target in git_wrapper.get_branches() or (not offline and target.startswith("origin/")):
             # Check for uncommitted changes
             if git_wrapper.is_dirty(untracked_files=True) and not force:
-                action = inquirer.select(
-                    message="You have uncommitted changes. What would you like to do?",
-                    choices=[
+                action = select_or_default(
+                    "You have uncommitted changes. What would you like to do?",
+                    [
                         "Stash changes",
                         "Continue without stashing",
                         "Abort"
-                    ]
-                ).execute()
+                    ],
+                    0  # Default to "Stash changes"
+                )
 
                 if action == "Stash changes":
                     git_wrapper.stash('push')
@@ -1991,14 +2059,15 @@ def mv(
         # Check for unstaged changes
         if git_wrapper.is_dirty(untracked_files=True):
             console.print("[yellow]You have unstaged changes.[/yellow]")
-            action = inquirer.select(
-                message="How would you like to proceed?",
-                choices=[
+            action = select_or_default(
+                "How would you like to proceed?",
+                [
                     "Commit changes",
                     "Continue without committing",
                     "Abort"
-                ]
-            ).execute()
+                ],
+                0  # Default to "Commit changes"
+            )
 
             if action == "Commit changes":
                 full_commit_message = get_commit_message()
@@ -2153,7 +2222,7 @@ def stage(
             for s in unstaged:
                 console.print(s)
 
-            stage_all = inquirer.confirm(message="Do you want to stage all unstaged changes?", default=False).execute()
+            stage_all = confirm_or_default("Do you want to stage all unstaged changes?", False)
             if stage_all:
                 git_wrapper.add(all=True)
                 console.print("[green]Staged all unstaged changes.[/green]")
@@ -2218,7 +2287,7 @@ def unstage(
             for s in status:
                 console.print(s)
 
-            unstage_all = inquirer.confirm(message="Do you want to unstage all changes?", default=False).execute()
+            unstage_all = confirm_or_default("Do you want to unstage all changes?", False)
             if unstage_all:
                 git_wrapper.reset()
                 console.print("[green]Unstaged all changes.[/green]")
@@ -2375,7 +2444,7 @@ def commit(
 
         # First handle any unstaged changes
         if git_wrapper.is_dirty(untracked_files=True):
-            if add_all or inquirer.confirm(message="Do you want to stage all changes?", default=True).execute():
+            if add_all or confirm_or_default("Do you want to stage all changes?", True):
                 git_wrapper.add(all=True)
                 wip_message = get_manual_commit_message_from_list(messages) if messages else "WIP: Changes to be squashed"
                 git_wrapper.commit(wip_message)
@@ -2437,7 +2506,7 @@ def commit(
             console.print(commit_msg)
 
         # Only ask for confirmation if there's more than one commit
-        if len(commits_to_squash) > 1 and not inquirer.confirm(message="Do you want to squash these commits?", default=True).execute():
+        if len(commits_to_squash) > 1 and not confirm_or_default("Do you want to squash these commits?", True):
             return
 
         # Perform the squash
@@ -2473,7 +2542,7 @@ def _commit(
             try:
                 # First handle any unstaged changes
                 if git_wrapper.is_dirty(untracked_files=True):
-                    if add_all or inquirer.confirm(message="Do you want to stage all changes?", default=True).execute():
+                    if add_all or confirm_or_default("Do you want to stage all changes?", True):
                         git_wrapper.add(all=True)
                         console.print("[green]Added all changes to the staging area[/green]")
 
@@ -2530,7 +2599,7 @@ def _commit(
                 console.print("[green]Added all changes to the staging area[/green]")
             elif git_wrapper.is_dirty(untracked_files=True):
                 console.print("[yellow]You have unstaged changes.[/yellow]")
-                add_all = inquirer.confirm(message="Do you want to stage all changes?", default=True).execute()
+                add_all = confirm_or_default("Do you want to stage all changes?", True)
                 if add_all:
                     git_wrapper.add(all=True)
                     console.print("[green]Added all changes to the staging area[/green]")
@@ -2571,14 +2640,14 @@ def _commit(
 
 
 def get_commit_message(message=None, body=None):
-    use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
+    use_ai = confirm_or_default("Do you want to use AI to generate a commit message?", True)
     if use_ai:
         generated_message = explain(files=None, commit=None, start=None, end=None, as_command=False, days=None, daily_summary=False, summary=False, improve=False, custom_prompt=None, examples=False)
         if generated_message:
             console.print("[green]AI-generated commit message:[/green]")
             console.print(generated_message)
 
-            edit_message = inquirer.confirm(message="Do you want to edit this message?", default=False).execute()
+            edit_message = confirm_or_default("Do you want to edit this message?", False)
             if edit_message:
                 edited_message = edit_in_editor(generated_message)
                 console.print("[green]Edited commit message:[/green]")
@@ -2593,7 +2662,7 @@ def get_commit_message(message=None, body=None):
         full_commit_message = get_manual_commit_message(message, body)
 
     # Final confirmation
-    if not inquirer.confirm(message="Do you want to use this commit message?", default=True).execute():
+    if not confirm_or_default("Do you want to use this commit message?", True):
         return get_commit_message(message, body)  # Recursively call the function if the user doesn't confirm
 
     return full_commit_message
@@ -2697,15 +2766,16 @@ def split_message_body(body: str) -> str:
 def handle_unstaged_changes(branch_type):
     if git_wrapper.is_dirty(untracked_files=True):
         console.print("[yellow]You have unstaged changes.[/yellow]")
-        action = inquirer.select(
-            message="How would you like to proceed?",
-            choices=[
+        action = select_or_default(
+            "How would you like to proceed?",
+            [
                 "Commit changes",
-                "Stash changes",
+                "Stash changes", 
                 "Continue without committing",
                 "Abort"
-            ]
-        ).execute()
+            ],
+            0  # Default to "Commit changes"
+        )
 
         if action == "Commit changes":
             full_commit_message = get_commit_message()
@@ -3374,14 +3444,15 @@ def push(
                 console.print("[green]Changes committed.[/green]")
             else:
                 console.print("[yellow]You have unstaged changes.[/yellow]")
-                action = inquirer.select(
-                    message="How would you like to proceed?",
-                    choices=[
+                action = select_or_default(
+                    "How would you like to proceed?",
+                    [
                         "Commit changes",
-                        "Continue without committing",
+                        "Continue without committing", 
                         "Abort"
-                    ]
-                ).execute()
+                    ],
+                    0  # Default to "Commit changes"
+                )
 
                 if action == "Commit changes":
                     full_message = get_commit_message()
@@ -3402,14 +3473,15 @@ def push(
 
                 if behind > 0 and not force:
                     console.print(f"[yellow]Your local branch is {behind} commit(s) behind the remote branch.[/yellow]")
-                    action = inquirer.select(
-                        message="How would you like to proceed?",
-                        choices=[
+                    action = select_or_default(
+                        "How would you like to proceed?",
+                        [
                             "Pull and rebase",
                             "Force push",
                             "Abort"
-                        ]
-                    ).execute()
+                        ],
+                        0  # Default to "Pull and rebase"
+                    )
 
                     if action == "Pull and rebase":
                         git_wrapper.pull('--rebase', remote, branch)
