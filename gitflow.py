@@ -84,6 +84,28 @@ To get help about the script, call it with the `--help` option:
 ./gitflow.py --help
 ```
 
+## Accepting Defaults for All Prompts
+
+The `-y`/`--yes` flag can be used with any command to automatically accept default values for all interactive prompts. This is particularly useful for automation or when you want to speed up common operations.
+
+```bash
+# Commit changes without any prompts - accepts defaults for:
+# - Stage all changes (default: yes)
+# - Use AI to generate commit message (default: yes)  
+# - Edit the generated message (default: no)
+# - Use the final commit message (default: yes)
+./gitflow.py -y commit
+
+# Stage files without being prompted
+./gitflow.py -y stage
+
+# Other examples
+./gitflow.py -y finish -m "Complete feature"
+./gitflow.py -y push
+```
+
+The `-y` flag respects the default values that would normally be suggested in the interactive prompts, making it safe to use in most scenarios while significantly reducing the number of confirmations needed.
+
 ## Starting and Finishing Branches
 
 ### Starting a Branch
@@ -823,6 +845,22 @@ def confirm_or_default(message: str, default: bool = True) -> bool:
     if YES_TO_ALL:
         return default
     return inquirer.confirm(message=message, default=default).execute()
+
+def select_or_default(message: str, choices: list, default_index: int = 0):
+    """
+    Show a selection prompt or return the default choice if --yes flag is used.
+    
+    Args:
+        message: The selection message to show
+        choices: List of choices to select from
+        default_index: Index of the default choice to return if --yes is used
+        
+    Returns:
+        The user's choice or the default choice if --yes flag is set
+    """
+    if YES_TO_ALL:
+        return choices[default_index]
+    return inquirer.select(message=message, choices=choices).execute()
 
 # Initialize the GitWrapper
 git_wrapper = GitWrapper()
@@ -1797,14 +1835,15 @@ def checkout(
         if target in git_wrapper.get_branches() or (not offline and target.startswith("origin/")):
             # Check for uncommitted changes
             if git_wrapper.is_dirty(untracked_files=True) and not force:
-                action = inquirer.select(
-                    message="You have uncommitted changes. What would you like to do?",
-                    choices=[
+                action = select_or_default(
+                    "You have uncommitted changes. What would you like to do?",
+                    [
                         "Stash changes",
                         "Continue without stashing",
                         "Abort"
-                    ]
-                ).execute()
+                    ],
+                    0  # Default to "Stash changes"
+                )
 
                 if action == "Stash changes":
                     git_wrapper.stash('push')
@@ -2020,14 +2059,15 @@ def mv(
         # Check for unstaged changes
         if git_wrapper.is_dirty(untracked_files=True):
             console.print("[yellow]You have unstaged changes.[/yellow]")
-            action = inquirer.select(
-                message="How would you like to proceed?",
-                choices=[
+            action = select_or_default(
+                "How would you like to proceed?",
+                [
                     "Commit changes",
                     "Continue without committing",
                     "Abort"
-                ]
-            ).execute()
+                ],
+                0  # Default to "Commit changes"
+            )
 
             if action == "Commit changes":
                 full_commit_message = get_commit_message()
@@ -2726,15 +2766,16 @@ def split_message_body(body: str) -> str:
 def handle_unstaged_changes(branch_type):
     if git_wrapper.is_dirty(untracked_files=True):
         console.print("[yellow]You have unstaged changes.[/yellow]")
-        action = inquirer.select(
-            message="How would you like to proceed?",
-            choices=[
+        action = select_or_default(
+            "How would you like to proceed?",
+            [
                 "Commit changes",
-                "Stash changes",
+                "Stash changes", 
                 "Continue without committing",
                 "Abort"
-            ]
-        ).execute()
+            ],
+            0  # Default to "Commit changes"
+        )
 
         if action == "Commit changes":
             full_commit_message = get_commit_message()
@@ -3403,14 +3444,15 @@ def push(
                 console.print("[green]Changes committed.[/green]")
             else:
                 console.print("[yellow]You have unstaged changes.[/yellow]")
-                action = inquirer.select(
-                    message="How would you like to proceed?",
-                    choices=[
+                action = select_or_default(
+                    "How would you like to proceed?",
+                    [
                         "Commit changes",
-                        "Continue without committing",
+                        "Continue without committing", 
                         "Abort"
-                    ]
-                ).execute()
+                    ],
+                    0  # Default to "Commit changes"
+                )
 
                 if action == "Commit changes":
                     full_message = get_commit_message()
@@ -3431,14 +3473,15 @@ def push(
 
                 if behind > 0 and not force:
                     console.print(f"[yellow]Your local branch is {behind} commit(s) behind the remote branch.[/yellow]")
-                    action = inquirer.select(
-                        message="How would you like to proceed?",
-                        choices=[
+                    action = select_or_default(
+                        "How would you like to proceed?",
+                        [
                             "Pull and rebase",
                             "Force push",
                             "Abort"
-                        ]
-                    ).execute()
+                        ],
+                        0  # Default to "Pull and rebase"
+                    )
 
                     if action == "Pull and rebase":
                         git_wrapper.pull('--rebase', remote, branch)
