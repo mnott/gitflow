@@ -1253,7 +1253,8 @@ def start(
 def finish(
     delete: bool = typer.Option(True, "-d", "--delete", help="Delete the branch after finishing"),
     keep_local: bool = typer.Option(False, "-k", "--keep-local", help="Keep the local branch after finishing"),
-    messages: List[str] = typer.Option([], "-m", "--message", help="Commit message(s) before finishing (can be used multiple times)")
+    messages: List[str] = typer.Option([], "-m", "--message", help="Commit message(s) before finishing (can be used multiple times)"),
+    yes: bool = typer.Option(False, "-y", "--yes", help="Accept defaults for all prompts")
 ):
     """
     Finish the current branch according to gitflow conventions.
@@ -1266,6 +1267,9 @@ def finish(
         gf finish -m "Fix bug" # Commit and finish
         gf finish -m "Fix bug" -m "Detailed explanation" # Multi-paragraph commit and finish
     """
+    global YES_TO_ALL
+    if yes:
+        YES_TO_ALL = True
     git = GitWrapper()
     current_branch = git.get_current_branch()
 
@@ -1782,11 +1786,15 @@ def ls(
 @app.command()
 def checkout(
     target: Optional[str] = typer.Argument(None, help="The branch to switch to, or file/directory to revert"),
-    force: bool = typer.Option(False, "-f", "--force", help="Force checkout, discarding local changes")
+    force: bool = typer.Option(False, "-f", "--force", help="Force checkout, discarding local changes"),
+    yes: bool = typer.Option(False, "-y", "--yes", help="Accept defaults for all prompts")
 ):
     """
     Switch to a different branch or revert changes in files/directories.
     """
+    global YES_TO_ALL
+    if yes:
+        YES_TO_ALL = True
     offline = not git_wrapper.check_network_connection()
 
     try:
@@ -2170,6 +2178,7 @@ def add(
 def stage(
     all        : bool      = typer.Option  (False, "-a", "--all",         help="Stage all changes"),
     interactive: bool      = typer.Option  (False, "-i", "--interactive", help="Use interactive mode for staging"),
+    yes        : bool      = typer.Option  (False, "-y", "--yes",         help="Accept defaults for all prompts"),
     files      : List[str] = typer.Argument(None,                         help="Files or directories to stage")
 ):
     """
@@ -2180,6 +2189,9 @@ def stage(
     - Stage specific files       : ./gitflow.py stage file1.py file2.py
     - Use interactive staging    : ./gitflow.py stage --interactive
     """
+    global YES_TO_ALL
+    if yes:
+        YES_TO_ALL = True
     try:
         if all:
             git_wrapper.add(all=True)
@@ -2423,6 +2435,7 @@ def commit(
     add_all:     bool          = typer.Option  (False, "-a", "--all",         help="Add all changes before committing"),
     interactive: bool          = typer.Option  (False, "-i", "--interactive", help="Use interactive mode for commit message"),
     squash:      bool          = typer.Option  (False, "-s", "--squash",      help="Squash all commits ahead of remote into one"),
+    yes:         bool          = typer.Option  (False, "-y", "--yes",         help="Accept defaults for all prompts"),
     files:       List[str]     = typer.Argument(None,                         help="Files or directories to commit")
 ):
     """
@@ -2437,6 +2450,9 @@ def commit(
     - Squash commits and enter commit message:
         ./gitflow.py squash
     """
+    global YES_TO_ALL
+    if yes:
+        YES_TO_ALL = True
     try:
         if not squash:
             _commit(messages, body, add_all, interactive, False, files)
@@ -3401,7 +3417,8 @@ def push(
     branch: Optional[str] = typer.Argument(None, help="Branch to push (defaults to current)"),
     messages: List[str] = typer.Option([], "-m", "--message", help="Commit message(s) before pushing (can be used multiple times)"),
     body: Optional[str] = typer.Option(None, "-b", "--body", help="Commit message body"),
-    force: bool = typer.Option(False, "-f", "--force", help="Force push")
+    force: bool = typer.Option(False, "-f", "--force", help="Force push"),
+    yes: bool = typer.Option(False, "-y", "--yes", help="Accept defaults for all prompts")
 ):
     """
     Push changes to remote repository.
@@ -3415,6 +3432,9 @@ def push(
         gf push -m "Fix bug" # Commit and push
         gf push -m "Fix bug" -b "Detailed explanation" # Commit with body and push
     """
+    global YES_TO_ALL
+    if yes:
+        YES_TO_ALL = True
     try:
         # Get current branch if none specified
         if branch is None:
