@@ -783,6 +783,11 @@ def version_callback(value: bool):
             console.print(f"Repository version: {repo_version}")
         raise typer.Exit()
 
+def yes_callback(value: bool):
+    global YES_TO_ALL
+    if value:
+        YES_TO_ALL = True
+
 @app.callback()
 def main(
     version: bool = typer.Option(
@@ -790,10 +795,34 @@ def main(
         help="Show the version and exit",
         callback=version_callback,
         is_eager=True
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y",
+        help="Accept defaults for all prompts",
+        callback=yes_callback,
+        is_eager=True
     )
 ):
     """GitFlow - A tool for managing Git workflows."""
     pass
+
+# Global variable to track --yes flag
+YES_TO_ALL = False
+
+def confirm_or_default(message: str, default: bool = True) -> bool:
+    """
+    Show a confirmation prompt or return the default value if --yes flag is used.
+    
+    Args:
+        message: The confirmation message to show
+        default: The default value to return if --yes is used or user hits enter
+        
+    Returns:
+        bool: The user's choice or the default if --yes flag is set
+    """
+    if YES_TO_ALL:
+        return default
+    return inquirer.confirm(message=message, default=default).execute()
 
 # Initialize the GitWrapper
 git_wrapper = GitWrapper()
@@ -2153,7 +2182,7 @@ def stage(
             for s in unstaged:
                 console.print(s)
 
-            stage_all = inquirer.confirm(message="Do you want to stage all unstaged changes?", default=False).execute()
+            stage_all = confirm_or_default("Do you want to stage all unstaged changes?", False)
             if stage_all:
                 git_wrapper.add(all=True)
                 console.print("[green]Staged all unstaged changes.[/green]")
@@ -2218,7 +2247,7 @@ def unstage(
             for s in status:
                 console.print(s)
 
-            unstage_all = inquirer.confirm(message="Do you want to unstage all changes?", default=False).execute()
+            unstage_all = confirm_or_default("Do you want to unstage all changes?", False)
             if unstage_all:
                 git_wrapper.reset()
                 console.print("[green]Unstaged all changes.[/green]")
@@ -2375,7 +2404,7 @@ def commit(
 
         # First handle any unstaged changes
         if git_wrapper.is_dirty(untracked_files=True):
-            if add_all or inquirer.confirm(message="Do you want to stage all changes?", default=True).execute():
+            if add_all or confirm_or_default("Do you want to stage all changes?", True):
                 git_wrapper.add(all=True)
                 wip_message = get_manual_commit_message_from_list(messages) if messages else "WIP: Changes to be squashed"
                 git_wrapper.commit(wip_message)
@@ -2437,7 +2466,7 @@ def commit(
             console.print(commit_msg)
 
         # Only ask for confirmation if there's more than one commit
-        if len(commits_to_squash) > 1 and not inquirer.confirm(message="Do you want to squash these commits?", default=True).execute():
+        if len(commits_to_squash) > 1 and not confirm_or_default("Do you want to squash these commits?", True):
             return
 
         # Perform the squash
@@ -2473,7 +2502,7 @@ def _commit(
             try:
                 # First handle any unstaged changes
                 if git_wrapper.is_dirty(untracked_files=True):
-                    if add_all or inquirer.confirm(message="Do you want to stage all changes?", default=True).execute():
+                    if add_all or confirm_or_default("Do you want to stage all changes?", True):
                         git_wrapper.add(all=True)
                         console.print("[green]Added all changes to the staging area[/green]")
 
@@ -2530,7 +2559,7 @@ def _commit(
                 console.print("[green]Added all changes to the staging area[/green]")
             elif git_wrapper.is_dirty(untracked_files=True):
                 console.print("[yellow]You have unstaged changes.[/yellow]")
-                add_all = inquirer.confirm(message="Do you want to stage all changes?", default=True).execute()
+                add_all = confirm_or_default("Do you want to stage all changes?", True)
                 if add_all:
                     git_wrapper.add(all=True)
                     console.print("[green]Added all changes to the staging area[/green]")
@@ -2571,14 +2600,14 @@ def _commit(
 
 
 def get_commit_message(message=None, body=None):
-    use_ai = inquirer.confirm(message="Do you want to use AI to generate a commit message?", default=True).execute()
+    use_ai = confirm_or_default("Do you want to use AI to generate a commit message?", True)
     if use_ai:
         generated_message = explain(files=None, commit=None, start=None, end=None, as_command=False, days=None, daily_summary=False, summary=False, improve=False, custom_prompt=None, examples=False)
         if generated_message:
             console.print("[green]AI-generated commit message:[/green]")
             console.print(generated_message)
 
-            edit_message = inquirer.confirm(message="Do you want to edit this message?", default=False).execute()
+            edit_message = confirm_or_default("Do you want to edit this message?", False)
             if edit_message:
                 edited_message = edit_in_editor(generated_message)
                 console.print("[green]Edited commit message:[/green]")
@@ -2593,7 +2622,7 @@ def get_commit_message(message=None, body=None):
         full_commit_message = get_manual_commit_message(message, body)
 
     # Final confirmation
-    if not inquirer.confirm(message="Do you want to use this commit message?", default=True).execute():
+    if not confirm_or_default("Do you want to use this commit message?", True):
         return get_commit_message(message, body)  # Recursively call the function if the user doesn't confirm
 
     return full_commit_message
