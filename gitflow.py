@@ -52,28 +52,23 @@ explaining files and commits, you can run the following command:
 
 ## Post-Pull Command Configuration
 
-You can configure a command to be executed automatically after running `gf pull -a`:
+You can configure a command to be executed automatically after running `gf pull -r`:
 
 ```bash
 # Configure a post-pull command
-./gitflow.py config --post-pull 'ssh tc "cd /opt/data/tenantcleanup && PYTHONPATH=/opt/data/tenantcleanup:/opt/data/tenantcleanup/ai gf pull -a"'
+./gitflow.py config --post-pull 'ssh tc "cd /opt/data/tenantcleanup && PYTHONPATH=/opt/data/tenantcleanup:/opt/data/tenantcleanup/ai gf pull -r"'
 
 # Remove the post-pull command
 ./gitflow.py config --post-pull ""
 ```
 
 The post-pull command is stored in `.git/config` as `gitflow.postpullcommand` and will be executed
-after all branches have been pulled when using `gf pull -a`.
+after all branches have been pulled when using `gf pull -r`.
 
-To skip the post-pull command execution (for local-only operations), use the `-l`/`--local` flag:
-
-```bash
-# Pull all branches without executing post-pull command
-./gitflow.py pull -a -l
-
-# Pull current branch without executing post-pull command  
-./gitflow.py pull -l
-```
+Pull options:
+- `gf pull`: Pull current branch only
+- `gf pull -a`: Pull all local branches without executing post-pull command (local-only)
+- `gf pull -r`: Pull all branches and execute post-pull command (remote/comprehensive)
 
 
 # Usage
@@ -1076,14 +1071,14 @@ def config(
     email:    Optional[str] = typer.Option(None,                  "-e", "--email",    help="Your email for git config"),
     name:     Optional[str] = typer.Option(None,                  "-n", "--name",     help="Your name for git config"),
     host:     Optional[str] = typer.Option("github.wdf.sap.corp", "-h", "--host",     help="GitHub host", show_default=True),
-    post_pull_cmd: Optional[str] = typer.Option(None,             "-p", "--post-pull", help="Command to execute after 'gf pull -a' (use 'gf pull -a -l' to skip)")
+    post_pull_cmd: Optional[str] = typer.Option(None,             "-p", "--post-pull", help="Command to execute after 'gf pull -r'")
 ):
     """
     Configure Git and GitHub settings.
 
     Prompts for username, token, email, name, and host if not provided via CLI options.
-    Can also configure a post-pull command that will be executed after 'gf pull -a'.
-    Use 'gf pull -a -l' to skip post-pull command execution.
+    Can also configure a post-pull command that will be executed after 'gf pull -r'.
+    Use 'gf pull -a' for local-only pulls without post-pull command execution.
     """
     # Handle post-pull command configuration if specified
     if post_pull_cmd is not None:
@@ -3533,21 +3528,21 @@ def push(
 def pull(
     remote:       str           = typer.Option("origin",                help="The name of the remote to pull from"),
     branch:       Optional[str] = typer.Option(None,                    help="The branch to pull. If not specified, pulls the current branch"),
-    all_branches: bool          = typer.Option(False,"-a",  "--all",    help="Pull all branches"),
+    all_branches: bool          = typer.Option(False,"-a",  "--all",    help="Pull all local branches"),
     prune:        bool          = typer.Option(False,"-p",  "--prune",  help="Prune remote-tracking branches no longer on remote"),
-    rebase:       bool          = typer.Option(False,"-r",  "--rebase", help="Rebase the current branch on top of the upstream branch after fetching"),
-    local_only:   bool          = typer.Option(False,"-l",  "--local",  help="Skip post-pull command execution (local only)")
+    remote_all:   bool          = typer.Option(False,"-r",  "--remote", help="Pull all branches and execute post-pull commands on remote")
 ):
-    """Pull changes from the remote repository. 
-    
-    Use -l/--local to skip executing any configured post-pull commands."""
+    """Pull changes from the remote repository.
+
+    Use -a/--all to pull all local branches.
+    Use -r/--remote to pull all branches and execute post-pull commands."""
     git = GitWrapper()
 
     # Fetch changes first
     git.fetch(remote, None, False, prune)
     console.print("Fetched changes from remote.")
 
-    if all_branches:
+    if all_branches or remote_all:
         console.print("Pulling changes for all local branches...")
         current_branch = git.get_current_branch()
         current_path = Path.cwd()
@@ -3556,8 +3551,6 @@ def pull(
         # First pull the current branch
         console.print(f"[blue]Pulling current branch {current_branch}...[/blue]")
         pull_args = ['git', 'pull', remote]
-        if rebase:
-            pull_args.insert(2, '--rebase')
         result = subprocess.run(pull_args, capture_output=True, text=True)
         if result.returncode == 0:
             if result.stdout:
@@ -3635,9 +3628,6 @@ def pull(
                     git.repo.git.branch('--set-upstream-to', f'{remote}/{local_branch}')
                     console.print(f"[blue]Set up tracking for {local_branch} -> {remote}/{local_branch}[/blue]")
 
-                if rebase:
-                    pull_args.insert(2, '--rebase')
-
                 result = subprocess.run(pull_args, capture_output=True, text=True)
                 if result.returncode == 0:
                     if result.stdout:
@@ -3688,30 +3678,27 @@ def pull(
         if current_branch != git.get_current_branch():
             console.print(f"[blue]Returning to original branch {current_branch}...[/blue]")
             git.checkout(current_branch)
-        
-        # Execute post-pull command if configured and not local-only
+
+        # Execute post-pull command only if -r/--remote was used
         post_pull_cmd = git.get_git_metadata("gitflow.postpullcommand")
-        if post_pull_cmd:
-            if not local_only:
-                console.print(f"[blue]Executing post-pull command: {post_pull_cmd}[/blue]")
-                try:
-                    result = subprocess.run(post_pull_cmd, shell=True, capture_output=True, text=True)
-                    if result.returncode == 0:
-                        if result.stdout:
-                            console.print(f"[green]Post-pull command output:[/green]")
-                            for line in result.stdout.strip().split('\n'):
-                                console.print(f"  {line}")
-                        console.print(f"[green]Post-pull command completed successfully[/green]")
-                    else:
-                        console.print(f"[red]Post-pull command failed with exit code {result.returncode}[/red]")
-                        if result.stderr:
-                            console.print(f"[red]Error output:[/red]")
-                            for line in result.stderr.strip().split('\n'):
-                                console.print(f"  {line}")
-                except Exception as e:
-                    console.print(f"[red]Failed to execute post-pull command: {e}[/red]")
-            else:
-                pass  # Skip post-pull command silently
+        if post_pull_cmd and remote_all:
+            console.print(f"[blue]Executing post-pull command: {post_pull_cmd}[/blue]")
+            try:
+                result = subprocess.run(post_pull_cmd, shell=True, capture_output=True, text=True)
+                if result.returncode == 0:
+                    if result.stdout:
+                        console.print(f"[green]Post-pull command output:[/green]")
+                        for line in result.stdout.strip().split('\n'):
+                            console.print(f"  {line}")
+                    console.print(f"[green]Post-pull command completed successfully[/green]")
+                else:
+                    console.print(f"[red]Post-pull command failed with exit code {result.returncode}[/red]")
+                    if result.stderr:
+                        console.print(f"[red]Error output:[/red]")
+                        for line in result.stderr.strip().split('\n'):
+                            console.print(f"  {line}")
+            except Exception as e:
+                console.print(f"[red]Failed to execute post-pull command: {e}[/red]")
         return
 
     else:
@@ -3719,8 +3706,6 @@ def pull(
         pull_args = ['git', 'pull', remote]
         if branch:
             pull_args.append(branch)
-        if rebase:
-            pull_args.append('--rebase')
 
         try:
             result = subprocess.run(pull_args, capture_output=True, text=True)
