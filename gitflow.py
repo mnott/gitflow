@@ -1544,7 +1544,7 @@ def weekly_update(
 #
 @app.command()
 def cds_update(
-    remote:  str           = typer.Option("https://github.wdf.sap.corp/I052341/tenantcleanup-cds", "-r", "--remote", help="URL of the remote tenantcleanup-cds repository"),
+    remote:  str           = typer.Option("https://github.wdf.sap.corp/BEO/tenantcleanup-cds", "-r", "--remote", help="URL of the remote tenantcleanup-cds repository"),
     local:   str           = typer.Option("cds-views", "-l", "--local",   help="Local path where cds-views content will be synced"),
     message: Optional[str] = typer.Option(None,        "-m", "--message", help="Specify a commit message"),
     body:    Optional[str] = typer.Option(None,        "-b", "--body",    help="Specify a commit message body"),
