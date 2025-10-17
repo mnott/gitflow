@@ -3530,12 +3530,12 @@ def pull(
     branch:       Optional[str] = typer.Option(None,                    help="The branch to pull. If not specified, pulls the current branch"),
     all_branches: bool          = typer.Option(False,"-a",  "--all",    help="Pull all local branches"),
     prune:        bool          = typer.Option(False,"-p",  "--prune",  help="Prune remote-tracking branches no longer on remote"),
-    remote_all:   bool          = typer.Option(False,"-r",  "--remote", help="Pull current branch and execute post-pull commands")
+    remote_all:   bool          = typer.Option(False,"-r",  "--remote", help="Execute post-pull command only (no local pull)")
 ):
     """Pull changes from the remote repository.
 
     Use -a/--all to pull all local branches (does not execute post-pull command).
-    Use -r/--remote to pull current branch and execute post-pull commands."""
+    Use -r/--remote to execute post-pull command only (does not pull locally)."""
     git = GitWrapper()
 
     # Fetch changes first
@@ -3681,42 +3681,8 @@ def pull(
         return
 
     elif remote_all:
-        # Pull current branch only and execute post-pull command
-        console.print("Pulling current branch and executing post-pull command...")
-        current_branch = git.get_current_branch()
-        console.print(f"[blue]Current branch: {current_branch}[/blue]")
-
-        console.print(f"[blue]Pulling current branch {current_branch}...[/blue]")
-        pull_args = ['git', 'pull', remote]
-        result = subprocess.run(pull_args, capture_output=True, text=True)
-        if result.returncode == 0:
-            if result.stdout:
-                for line in result.stdout.strip().split('\n'):
-                    if line.startswith('Updating'):
-                        console.print(f"[blue]{line}[/blue]")
-                    elif line.startswith('Fast-forward'):
-                        console.print(f"[green]{line}[/green]")
-                    elif line.startswith('Already up to date'):
-                        console.print(f"[yellow]{line}[/yellow]")
-                    else:
-                        if line.startswith('+++') or line.startswith('---'):
-                            console.print(line)
-                        else:
-                            colored_line = ''
-                            for char in line:
-                                if char == '+':
-                                    colored_line += '[green]+[/green]'
-                                elif char == '-':
-                                    colored_line += '[red]-[/red]'
-                                else:
-                                    colored_line += char
-                            console.print(colored_line)
-            if "Already up to date" in result.stdout:
-                console.print(f"[yellow]Branch {current_branch} is up to date.[/yellow]")
-            else:
-                console.print(f"[green]Pulled changes for branch {current_branch}[/green]")
-        else:
-            console.print(f"[red]Error pulling current branch: {result.stderr}[/red]")
+        # Execute post-pull command only (do not pull current branch)
+        console.print("Executing post-pull command...")
 
         # Execute post-pull command
         post_pull_cmd = git.get_git_metadata("gitflow.postpullcommand")
@@ -3738,6 +3704,8 @@ def pull(
                             console.print(f"  {line}")
             except Exception as e:
                 console.print(f"[red]Failed to execute post-pull command: {e}[/red]")
+        else:
+            console.print(f"[yellow]No post-pull command configured. Use 'gf config --post-pull <command>' to set one.[/yellow]")
         return
 
     else:
