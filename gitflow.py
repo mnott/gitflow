@@ -742,7 +742,7 @@ a safe, intelligent process that understands GitFlow workflows and prevents comm
 
 """
 
-__version__ = "1.0.23"
+__version__ = "1.0.24"
 
 from collections import defaultdict
 from datetime import datetime, timedelta
