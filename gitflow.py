@@ -2359,7 +2359,7 @@ def stash(
             if include_untracked:
                 stash_args.append('--include-untracked')
             if message:
-                split_message = git_wrapper.split_message_body(message)
+                split_message = split_message_body(message)
                 stash_args.extend(['-m', split_message])
 
             git_wrapper.stash(*stash_args)
@@ -3526,11 +3526,11 @@ def push(
 #
 @app.command()
 def pull(
-    remote:       str           = typer.Option("origin",                help="The name of the remote to pull from"),
-    branch:       Optional[str] = typer.Option(None,                    help="The branch to pull. If not specified, pulls the current branch"),
-    all_branches: bool          = typer.Option(False,"-a",  "--all",    help="Pull all local branches"),
-    prune:        bool          = typer.Option(False,"-p",  "--prune",  help="Prune remote-tracking branches no longer on remote"),
-    remote_all:   bool          = typer.Option(False,"-r",  "--remote", help="Execute post-pull command only (no local pull)")
+    remote:       str           = typer.Option("origin", "--remote-name", help="The name of the remote to pull from"),
+    branch:       Optional[str] = typer.Option(None,                      help="The branch to pull. If not specified, pulls the current branch"),
+    all_branches: bool          = typer.Option(False,"-a",  "--all",      help="Pull all local branches"),
+    prune:        bool          = typer.Option(False,"-p",  "--prune",    help="Prune remote-tracking branches no longer on remote"),
+    remote_all:   bool          = typer.Option(False,"-r",  "--remote",   help="Execute post-pull command only (no local pull)")
 ):
     """Pull changes from the remote repository.
 
