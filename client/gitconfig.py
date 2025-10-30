@@ -25,19 +25,18 @@ class GitConfig(ConfigProvider):
         self.git_dir = self._find_git_dir()
 
     def _find_git_dir(self):
-        """Find the .git directory relative to the scocr.py file."""
-        # Get the directory of the scocr.py file
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+        """Find the .git directory by traversing up from the current working directory."""
+        # Start from the current working directory
+        current_dir = os.getcwd()
 
-        # Traverse up the directory tree from the script location
-        current_dir = script_dir
+        # Traverse up the directory tree from the current working directory
         while current_dir != '/':
             git_dir = os.path.join(current_dir, '.git')
             if os.path.exists(git_dir):
                 return git_dir
             current_dir = os.path.dirname(current_dir)
 
-        raise ValueError("No .git directory found in the parent directories of scocr.py")
+        raise ValueError("No .git directory found in the parent directories of the current working directory")
 
     def _run_git_command(self, args):
         work_tree = os.path.dirname(self.git_dir)
