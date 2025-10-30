@@ -176,7 +176,7 @@ class ConfigProvider(ABC):
         return True
 
 
-    def configure_provider(self, provider: str):
+    def configure_provider(self, provider: str) -> bool:
         """
         Interactively configure a provider.
 
@@ -185,6 +185,9 @@ class ConfigProvider(ABC):
 
         Args:
             provider (str): The name of the provider to configure.
+
+        Returns:
+            bool: True if the provider was successfully configured or updated, False if deleted or cancelled.
         """
         if self.provider_exists(provider):
             action = inquirer.select(
@@ -196,22 +199,22 @@ class ConfigProvider(ABC):
                 if inquirer.confirm(message=f"Are you sure you want to delete the provider '{provider}'?", default=False).execute():
                     self.delete_provider(provider)
                     console.print(f"[green]Provider '{provider}' has been deleted.[/green]")
-                return
+                return False
             elif action == "Clone":
                 new_provider = inquirer.text(message="Enter the name for the cloned provider:").execute()
                 if self.clone_provider(provider, new_provider):
                     provider = new_provider  # Continue configuring the new cloned provider
                 else:
-                    return
+                    return False
             elif action == "Cancel":
                 console.print("[yellow]Operation cancelled.[/yellow]")
-                return
+                return False
         else:
             if inquirer.confirm(message=f"Provider '{provider}' does not exist. Do you want to create it?", default=True).execute():
                 self.create_provider(provider)
             else:
                 console.print("[yellow]Operation cancelled.[/yellow]")
-                return
+                return False
 
         existing_metadata = self.get_provider_metadata(provider)
 
@@ -245,8 +248,10 @@ class ConfigProvider(ABC):
         if inquirer.confirm(message="Do you want to save these changes?", default=True).execute():
             self.set_provider_metadata(provider, new_metadata)
             console.print(f"[green]Provider {provider} configured successfully.[/green]")
+            return True
         else:
             console.print("[yellow]Configuration cancelled. No changes were saved.[/yellow]")
+            return False
 
 
 

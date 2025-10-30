@@ -43,12 +43,32 @@ this by running the following command:
 ./gitflow.py config
 ```
 
-If you want to also configure your OpenAI API key for generating commit messages and
-explaining files and commits, you can run the following command:
+If you want to also configure your AI provider (OpenAI, Claude, etc.) for generating commit
+messages and explaining files and commits, you can run the following command:
 
 ```bash
 ./gitflow.py config-ai
 ```
+
+The AI configuration is stored in the local `.git/config` file of each repository, allowing
+you to use different AI providers for different projects. The script automatically detects
+the repository you're in and uses its configuration.
+
+To test your AI configuration:
+
+```bash
+# Test with default prompt
+./gitflow.py test-ai
+
+# Test with custom prompt
+./gitflow.py test-ai -p "What is 2+2?"
+```
+
+The `test-ai` command shows:
+- Which `.git/config` file is being used
+- The active AI provider and model
+- The API URL being called
+- Request and response details (with API keys masked)
 
 ## Post-Pull Command Configuration
 
@@ -1053,12 +1073,64 @@ def config_ai(
         else:
             provider = selected
 
-    git_config.configure_provider(provider)
+    # Configure the provider and check if it was successfully saved (not deleted or cancelled)
+    if git_config.configure_provider(provider):
+        # Ask if the user wants to set this provider as default
+        if inquirer.confirm(message=f"Do you want to set {provider} as the default AI provider?", default=False).execute():
+            git_config.set_default_provider(provider)
+            console.print(f"[green]Set {provider} as the default AI provider.[/green]")
 
-    # Ask if the user wants to set this provider as default
-    if inquirer.confirm(message=f"Do you want to set {provider} as the default AI provider?", default=False).execute():
-        git_config.set_default_provider(provider)
-        console.print(f"[green]Set {provider} as the default AI provider.[/green]")
+
+#
+# Test AI Configuration
+#
+@app.command()
+def test_ai(
+    prompt: Optional[str] = typer.Option("Hello, please respond with 'AI is working!'", "-p", "--prompt", help="The test prompt to send to the AI")
+):
+    """
+    Test the AI configuration by sending a simple prompt and showing all connection details.
+
+    This command will display:
+    - The .git directory being used for configuration
+    - The AI provider and model being used
+    - The API URL being called
+    - The request headers (with API keys masked)
+    - The response from the AI
+
+    Examples:
+    - Test with default prompt:
+        ./gitflow.py test-ai
+    - Test with custom prompt:
+        ./gitflow.py test-ai -p "What is 2+2?"
+    """
+    try:
+        # Initialize GitConfig and show where config is coming from
+        git_config = GitConfig()
+        console.print(f"[cyan]Configuration source:[/cyan] {git_config.git_dir}/config")
+        console.print(f"[cyan]Current working directory:[/cyan] {os.getcwd()}")
+        console.print()
+
+        # Initialize AI Client
+        ai_client = AIClient(config_provider=git_config)
+        current_provider = ai_client.get_current_provider_name()
+
+        console.print(f"[cyan]Active AI Provider:[/cyan] {current_provider}")
+        console.print()
+
+        # Make the test request with verbose output
+        console.print(f"[bold blue]Sending test prompt:[/bold blue] {prompt}")
+        console.print()
+
+        response = ai_client.prompt(prompt, tokens=100, verbose=True)
+
+        console.print()
+        console.print("[green]✓ AI Response:[/green]")
+        console.print(response)
+
+    except Exception as e:
+        console.print()
+        console.print(f"[red]✗ Error testing AI: {e}[/red]")
 
 
 #
