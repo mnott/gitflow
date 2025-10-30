@@ -136,7 +136,7 @@ class AIClient:
         return headers_dict
 
 
-    def prompt(self, prompt: str, model: Optional[str] = None, tokens: int = 1000):
+    def prompt(self, prompt: str, model: Optional[str] = None, tokens: int = 1000, verbose: bool = False):
         """
         Send a prompt to the AI provider and get a response.
 
@@ -144,6 +144,7 @@ class AIClient:
             prompt          (str): The prompt to send to the AI model.
             model (Optional[str]): The specific model to use. If None, uses the default model.
             tokens          (int): The maximum number of tokens to generate in the response.
+            verbose        (bool): If True, print the API URL and request details.
 
         Returns:
             str: The generated response from the AI model.
@@ -171,8 +172,30 @@ class AIClient:
             "max_tokens": tokens
         }
 
+        # Print verbose information if requested
+        if verbose:
+            console.print(f"[cyan]API URL:[/cyan] {self.url}")
+            console.print(f"[cyan]Model:[/cyan] {self.model}")
+            console.print(f"[cyan]Max Tokens:[/cyan] {tokens}")
+            # Print headers but mask sensitive information
+            safe_headers = {k: "***" if "key" in k.lower() or "authorization" in k.lower() else v
+                           for k, v in headers.items()}
+            console.print(f"[cyan]Headers:[/cyan] {safe_headers}")
+            console.print(f"[cyan]Request Body:[/cyan]")
+            safe_data = data.copy()
+            if 'messages' in safe_data and safe_data['messages']:
+                prompt_preview = safe_data['messages'][0]['content'][:200] + "..." if len(safe_data['messages'][0]['content']) > 200 else safe_data['messages'][0]['content']
+                safe_data['messages'][0]['content'] = prompt_preview
+            console.print(safe_data)
+
         # Make the API request
         response = requests.post(self.url, headers=headers, json=data)
+
+        if verbose:
+            console.print(f"[cyan]Response Status:[/cyan] {response.status_code}")
+            console.print(f"[cyan]Response Headers:[/cyan] {dict(response.headers)}")
+            console.print(f"[cyan]Response Body:[/cyan] {response.text[:500]}")
+
         response.raise_for_status()
 
         # Parse and return the result
