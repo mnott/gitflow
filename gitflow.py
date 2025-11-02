@@ -3730,7 +3730,7 @@ def pull(
         # Push to origin
         console.print(f"[blue]Pushing to {remote}/{target_branch}...[/blue]")
         try:
-            git.push_to_remote(target_branch, remote)
+            git.push(remote, target_branch)
             console.print(f"[green]Pushed to {remote}/{target_branch} successfully[/green]")
         except Exception as e:
             console.print(f"[red]Error pushing to {remote}: {e}[/red]")
