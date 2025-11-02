@@ -341,6 +341,39 @@ To pull changes for all remote branches that you have locally, run:
 ./gitflow.py pull -a
 ```
 
+### Sync Fork with Upstream
+
+If you're working on a fork and need to sync with the upstream repository, use:
+
+```bash
+./gitflow.py pull -u
+```
+
+or
+
+```bash
+./gitflow.py pull --upstream
+```
+
+This command will:
+1. Automatically stash any uncommitted changes
+2. Fetch from the upstream remote
+3. Merge upstream changes into your current branch
+4. Push the updated branch to your origin remote
+5. Restore your stashed changes
+
+You can also specify a specific branch to sync:
+
+```bash
+./gitflow.py pull -u --branch main
+```
+
+**Note:** Before using this command, make sure you have added the upstream remote:
+
+```bash
+git remote add upstream https://github.com/original-owner/repo.git
+```
+
 ### Copy a File
 
 To copy the latest commit of a specific file from the current branch into a target branch, run:
@@ -3602,13 +3635,134 @@ def pull(
     branch:       Optional[str] = typer.Option(None,                      help="The branch to pull. If not specified, pulls the current branch"),
     all_branches: bool          = typer.Option(False,"-a",  "--all",      help="Pull all local branches"),
     prune:        bool          = typer.Option(False,"-p",  "--prune",    help="Prune remote-tracking branches no longer on remote"),
-    remote_all:   bool          = typer.Option(False,"-r",  "--remote",   help="Execute post-pull command only (no local pull)")
+    remote_all:   bool          = typer.Option(False,"-r",  "--remote",   help="Execute post-pull command only (no local pull)"),
+    upstream:     bool          = typer.Option(False,"-u",  "--upstream", help="Sync with upstream remote (stash, fetch, merge, push, unstash)")
 ):
     """Pull changes from the remote repository.
 
     Use -a/--all to pull all local branches (does not execute post-pull command).
-    Use -r/--remote to execute post-pull command only (does not pull locally)."""
+    Use -r/--remote to execute post-pull command only (does not pull locally).
+    Use -u/--upstream to sync fork with upstream (stash, fetch upstream, merge, push origin, unstash)."""
     git = GitWrapper()
+
+    # Handle upstream sync for forks
+    if upstream:
+        current_branch = git.get_current_branch()
+        target_branch = branch if branch else current_branch
+
+        console.print(f"[blue]Syncing fork with upstream for branch: {target_branch}[/blue]")
+
+        # Check if upstream remote exists
+        try:
+            remotes = [r.name for r in git.repo.remotes]
+            if 'upstream' not in remotes:
+                console.print("[red]No 'upstream' remote found. Please add it first:[/red]")
+                console.print("[yellow]  git remote add upstream <upstream-repo-url>[/yellow]")
+                raise typer.Exit(1)
+        except Exception as e:
+            console.print(f"[red]Error checking remotes: {e}[/red]")
+            raise typer.Exit(1)
+
+        # Check for uncommitted changes and stash if needed
+        stashed = False
+        if git.repo.is_dirty(untracked_files=True):
+            console.print("[yellow]Uncommitted changes detected. Stashing...[/yellow]")
+            try:
+                stash_message = f"Auto-stash before upstream sync on {target_branch}"
+                git.repo.git.stash('push', '-u', '-m', stash_message)
+                stashed = True
+                console.print("[green]Changes stashed successfully[/green]")
+            except Exception as e:
+                console.print(f"[red]Error stashing changes: {e}[/red]")
+                raise typer.Exit(1)
+
+        # Switch to target branch if needed
+        if current_branch != target_branch:
+            console.print(f"[blue]Switching to branch: {target_branch}[/blue]")
+            try:
+                git.checkout(target_branch)
+            except Exception as e:
+                console.print(f"[red]Error switching to branch {target_branch}: {e}[/red]")
+                if stashed:
+                    console.print("[yellow]Attempting to restore stashed changes...[/yellow]")
+                    try:
+                        git.repo.git.stash('pop')
+                    except:
+                        console.print("[red]Failed to restore stash. Use 'git stash pop' manually.[/red]")
+                raise typer.Exit(1)
+
+        # Fetch from upstream
+        console.print("[blue]Fetching from upstream...[/blue]")
+        try:
+            git.fetch('upstream', None, False, prune)
+            console.print("[green]Fetched from upstream successfully[/green]")
+        except Exception as e:
+            console.print(f"[red]Error fetching from upstream: {e}[/red]")
+            if stashed:
+                console.print("[yellow]Attempting to restore stashed changes...[/yellow]")
+                try:
+                    git.repo.git.stash('pop')
+                except:
+                    console.print("[red]Failed to restore stash. Use 'git stash pop' manually.[/red]")
+            raise typer.Exit(1)
+
+        # Merge upstream changes
+        console.print(f"[blue]Merging upstream/{target_branch}...[/blue]")
+        try:
+            merge_result = git.repo.git.merge(f'upstream/{target_branch}')
+            if "Already up to date" in merge_result:
+                console.print("[yellow]Already up to date with upstream[/yellow]")
+            else:
+                console.print("[green]Merged upstream changes successfully[/green]")
+                if merge_result:
+                    for line in merge_result.strip().split('\n'):
+                        if line.startswith('Updating'):
+                            console.print(f"[blue]  {line}[/blue]")
+                        elif line.startswith('Fast-forward'):
+                            console.print(f"[green]  {line}[/green]")
+        except Exception as e:
+            console.print(f"[red]Error merging upstream changes: {e}[/red]")
+            console.print("[yellow]You may need to resolve conflicts manually.[/yellow]")
+            if stashed:
+                console.print("[yellow]Your local changes are stashed. Use 'git stash pop' after resolving conflicts.[/yellow]")
+            raise typer.Exit(1)
+
+        # Push to origin
+        console.print(f"[blue]Pushing to {remote}/{target_branch}...[/blue]")
+        try:
+            git.push_to_remote(target_branch, remote)
+            console.print(f"[green]Pushed to {remote}/{target_branch} successfully[/green]")
+        except Exception as e:
+            console.print(f"[red]Error pushing to {remote}: {e}[/red]")
+            if stashed:
+                console.print("[yellow]Attempting to restore stashed changes...[/yellow]")
+                try:
+                    git.repo.git.stash('pop')
+                except:
+                    console.print("[red]Failed to restore stash. Use 'git stash pop' manually.[/red]")
+            raise typer.Exit(1)
+
+        # Restore stashed changes
+        if stashed:
+            console.print("[blue]Restoring stashed changes...[/blue]")
+            try:
+                git.repo.git.stash('pop')
+                console.print("[green]Changes restored successfully[/green]")
+            except Exception as e:
+                console.print(f"[yellow]Could not automatically restore changes: {e}[/yellow]")
+                console.print("[yellow]Your changes are still in the stash. Run 'git stash list' to see them.[/yellow]")
+                console.print("[yellow]Use 'git stash pop' to restore them manually.[/yellow]")
+
+        # Switch back to original branch if needed
+        if current_branch != target_branch:
+            console.print(f"[blue]Switching back to branch: {current_branch}[/blue]")
+            try:
+                git.checkout(current_branch)
+            except Exception as e:
+                console.print(f"[yellow]Could not switch back to {current_branch}: {e}[/yellow]")
+
+        console.print("[green]Upstream sync completed successfully![/green]")
+        return
 
     # Fetch changes first
     git.fetch(remote, None, False, prune)
