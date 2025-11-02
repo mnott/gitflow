@@ -359,13 +359,19 @@ This command will:
 1. Automatically stash any uncommitted changes
 2. Fetch from the upstream remote
 3. Merge upstream changes into your current branch
-4. Push the updated branch to your origin remote
+4. Push the updated branch to your origin remote (by default)
 5. Restore your stashed changes
 
 You can also specify a specific branch to sync:
 
 ```bash
 ./gitflow.py pull -u --branch main
+```
+
+To sync without pushing to your fork (only update local):
+
+```bash
+./gitflow.py pull -u --no-push
 ```
 
 **Note:** Before using this command, make sure you have added the upstream remote:
@@ -3636,13 +3642,15 @@ def pull(
     all_branches: bool          = typer.Option(False,"-a",  "--all",      help="Pull all local branches"),
     prune:        bool          = typer.Option(False,"-p",  "--prune",    help="Prune remote-tracking branches no longer on remote"),
     remote_all:   bool          = typer.Option(False,"-r",  "--remote",   help="Execute post-pull command only (no local pull)"),
-    upstream:     bool          = typer.Option(False,"-u",  "--upstream", help="Sync with upstream remote (stash, fetch, merge, push, unstash)")
+    upstream:     bool          = typer.Option(False,"-u",  "--upstream", help="Sync with upstream remote (stash, fetch, merge, optionally push, unstash)"),
+    push:         bool          = typer.Option(True, "--push/--no-push",  help="Push to origin after syncing with upstream (only with -u/--upstream)")
 ):
     """Pull changes from the remote repository.
 
     Use -a/--all to pull all local branches (does not execute post-pull command).
     Use -r/--remote to execute post-pull command only (does not pull locally).
-    Use -u/--upstream to sync fork with upstream (stash, fetch upstream, merge, push origin, unstash)."""
+    Use -u/--upstream to sync fork with upstream (stash, fetch upstream, merge, optionally push origin, unstash).
+    Use --no-push with -u to skip pushing to origin after upstream sync."""
     git = GitWrapper()
 
     # Handle upstream sync for forks
@@ -3727,20 +3735,23 @@ def pull(
                 console.print("[yellow]Your local changes are stashed. Use 'git stash pop' after resolving conflicts.[/yellow]")
             raise typer.Exit(1)
 
-        # Push to origin
-        console.print(f"[blue]Pushing to {remote}/{target_branch}...[/blue]")
-        try:
-            git.push(remote, target_branch)
-            console.print(f"[green]Pushed to {remote}/{target_branch} successfully[/green]")
-        except Exception as e:
-            console.print(f"[red]Error pushing to {remote}: {e}[/red]")
-            if stashed:
-                console.print("[yellow]Attempting to restore stashed changes...[/yellow]")
-                try:
-                    git.repo.git.stash('pop')
-                except:
-                    console.print("[red]Failed to restore stash. Use 'git stash pop' manually.[/red]")
-            raise typer.Exit(1)
+        # Push to origin (if requested)
+        if push:
+            console.print(f"[blue]Pushing to {remote}/{target_branch}...[/blue]")
+            try:
+                git.push(remote, target_branch)
+                console.print(f"[green]Pushed to {remote}/{target_branch} successfully[/green]")
+            except Exception as e:
+                console.print(f"[red]Error pushing to {remote}: {e}[/red]")
+                if stashed:
+                    console.print("[yellow]Attempting to restore stashed changes...[/yellow]")
+                    try:
+                        git.repo.git.stash('pop')
+                    except:
+                        console.print("[red]Failed to restore stash. Use 'git stash pop' manually.[/red]")
+                raise typer.Exit(1)
+        else:
+            console.print(f"[yellow]Skipping push to {remote} (use --push to enable)[/yellow]")
 
         # Restore stashed changes
         if stashed:
