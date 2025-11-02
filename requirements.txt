@@ -1,7 +1,7 @@
 InquirerPy==0.3.4
 pathlib==1.0.1
 typing==3.7.4.3
-typer==0.12.3
+typer>=0.15.0
 doc2md==0.1.0
 rich==13.7.1
 python-docx>=0.8.11
@@ -11,6 +11,6 @@ tinycss>=0.4
 requests>=2.31.0
 certifi>=2024.2.2
 urllib3>=2.0.7
-click<8.1
+click
 gitpython
 pytz
