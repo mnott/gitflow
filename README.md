@@ -1,4 +1,4 @@
-# gf
+# gitflow
 
 # Gitflow: A Git Wrapper for Release and Branch Management
 
@@ -74,7 +74,8 @@ You can configure a command to be executed automatically after running `gf pull 
 
 ```bash
 # Configure a post-pull command
-./gitflow.py config --post-pull 'ssh tc "cd /opt/data/tenantcleanup && PYTHONPATH=/opt/data/tenantcleanup:/opt/data/tenantcleanup/ai gf pull -r"'
+./gitflow.py config --post-pull 'ssh tc "cd /opt/data/tenantcleanup && 
+PYTHONPATH=/opt/data/tenantcleanup:/opt/data/tenantcleanup/ai gf pull -r"'
 
 # Remove the post-pull command
 ./gitflow.py config --post-pull ""
@@ -99,7 +100,8 @@ To get help about the script, call it with the `--help` option:
 
 ## Accepting Defaults for All Prompts
 
-The `-y`/`--yes` flag can be used with any command to automatically accept default values for all interactive prompts. This is particularly useful for automation or when you want to speed up common operations.
+The `-y`/`--yes` flag can be used with any command to automatically accept default values for all interactive 
+prompts. This is particularly useful for automation or when you want to speed up common operations.
 
 ```bash
 # Commit changes without any prompts - accepts defaults for:
@@ -117,7 +119,8 @@ The `-y`/`--yes` flag can be used with any command to automatically accept defau
 ./gitflow.py -y push
 ```
 
-The `-y` flag respects the default values that would normally be suggested in the interactive prompts, making it safe to use in most scenarios while significantly reducing the number of confirmations needed.
+The `-y` flag respects the default values that would normally be suggested in the interactive prompts, making it 
+safe to use in most scenarios while significantly reducing the number of confirmations needed.
 
 ## Starting and Finishing Branches
 
@@ -287,7 +290,8 @@ To commit the current changes with a specified message, run:
 For multi-paragraph commit messages, you can use multiple `-m` options:
 
 ```bash
-./gitflow.py commit -m "Fix authentication bug" -m "Updated login validation" -m "Added comprehensive error handling"
+./gitflow.py commit -m "Fix authentication bug" -m "Updated login validation" -m "Added comprehensive error 
+handling"
 ```
 
 If you do not specify a commit message, you will be prompted to enter one,
@@ -311,7 +315,8 @@ To commit and push changes with a message in one step:
 For multi-paragraph commit messages, you can use multiple `-m` options:
 
 ```bash
-./gitflow.py push -m "Deploy new feature" -m "Includes performance improvements" -m "Added comprehensive error handling"
+./gitflow.py push -m "Deploy new feature" -m "Includes performance improvements" -m "Added comprehensive error 
+handling"
 ```
 
 This will optionally allow you to stage and commit all current changes.
@@ -589,7 +594,8 @@ When running `gf finish` on a release branch:
 
 1. The version is extracted from the release branch name (e.g., `release/v1.8.40` → `1.8.40`)
 2. The `.version` file is updated with this version number
-3. If in the gitflow repository (detected by presence of `client/gitwrapper.py` and other files), `__version__` in `gitflow.py` is also updated
+3. If in the gitflow repository (detected by presence of `client/gitwrapper.py` and other files), `__version__` in 
+`gitflow.py` is also updated
 4. Changes are committed and merged into `main` and `develop`
 
 This means:

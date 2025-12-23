@@ -801,8 +801,6 @@ a safe, intelligent process that understands GitFlow workflows and prevents comm
 
 """
 
-__version__ = "1.0.24"
-
 from collections import defaultdict
 from datetime import datetime, timedelta
 from git import Repo, GitCommandError
@@ -813,25 +811,33 @@ from rich.table import Table
 from rich.text import Text
 from typing import List, Optional
 import glob
-import math
 import json
+import math
 import os
 import pytz
 import re
 import shutil
 import subprocess
-import typer
+import tempfile
+import time
+import tomllib
 import typer
 import urllib.parse
-
-import json
-import re
-
-import tempfile
-import subprocess
-import os
-import time
 from pathlib import Path
+
+
+def _get_version() -> str:
+    """Read version from pyproject.toml"""
+    pyproject_path = Path(__file__).parent / "pyproject.toml"
+    try:
+        with open(pyproject_path, "rb") as f:
+            data = tomllib.load(f)
+            return data["project"]["version"]
+    except Exception:
+        return "unknown"
+
+
+__version__ = _get_version()
 
 # Local imports
 from client import AIClient, GitConfig, DocGenerator, GitWrapper

@@ -4,11 +4,12 @@ from InquirerPy import inquirer
 from pathlib import Path
 from rich.console import Console
 from typing import Optional, Dict, List
-import subprocess
-import sys
 import json
 import os
 import re
+import subprocess
+import sys
+import tomllib
 
 class GitWrapper:
     def __init__(self):
@@ -1301,80 +1302,81 @@ class GitWrapper:
         gitflow_version = None
         repo_version = None
 
-        # Get gitflow version from the code
+        # Get gitflow version from pyproject.toml
         try:
-            # Get the path of the executed script (like $0 in bash)
             script_path = Path(sys.argv[0]).resolve()
-
-            # If the script is gitflow.py, use it directly
             if script_path.name == "gitflow.py":
-                gitflow_path = script_path
+                pyproject_path = script_path.parent / "pyproject.toml"
             else:
-                # Otherwise, we're probably in the client directory
-                gitflow_path = script_path.parent / "gitflow.py"
+                pyproject_path = script_path.parent / "pyproject.toml"
 
-            if gitflow_path.exists():
-                with open(gitflow_path, "r") as f:
-                    for line in f:
-                        if line.startswith("__version__"):
-                            gitflow_version = line.split("=")[1].strip().strip('"\'')
-                            break
+            if pyproject_path.exists():
+                with open(pyproject_path, "rb") as f:
+                    data = tomllib.load(f)
+                    gitflow_version = data.get("project", {}).get("version")
         except Exception:
             pass
 
-        # Get repository version from .version file
+        # Get repository version from pyproject.toml or .version file
         try:
-            with open(".version", "r") as f:
-                repo_version = f.read().strip()
+            if os.path.isfile("pyproject.toml"):
+                with open("pyproject.toml", "rb") as f:
+                    data = tomllib.load(f)
+                    repo_version = data.get("project", {}).get("version")
+            elif os.path.isfile(".version"):
+                with open(".version", "r") as f:
+                    repo_version = f.read().strip()
         except Exception:
             pass
 
         return gitflow_version, repo_version
 
     def update_repository_version(self, version: str, silent: bool = False) -> None:
-        """Update the repository version in .version file and gitflow.py if in gitflow repo"""
+        """Update the repository version in pyproject.toml (preferred) or .version file"""
         try:
-            # Always update .version file
+            # Check current version
             current_version = None
-            try:
-                with open('.version', 'r') as f:
-                    current_version = f.read().strip()
-            except FileNotFoundError:
-                pass
+            has_pyproject = os.path.isfile('pyproject.toml')
+
+            if has_pyproject:
+                try:
+                    with open('pyproject.toml', 'rb') as f:
+                        data = tomllib.load(f)
+                        current_version = data.get("project", {}).get("version")
+                except Exception:
+                    pass
+            else:
+                try:
+                    with open('.version', 'r') as f:
+                        current_version = f.read().strip()
+                except FileNotFoundError:
+                    pass
 
             # Only update if version is different or file doesn't exist
             if current_version != version:
-                # Update .version file
-                with open('.version', 'w') as f:
-                    f.write(version + '\n')
+                files_to_add = []
 
-                # Check if we're in the gitflow repository by looking for specific files/structure
-                is_gitflow_repo = (
-                    os.path.isdir('client') and
-                    os.path.isfile('client/gitwrapper.py') and
-                    os.path.isfile('gitflow.py') and
-                    '.git' in os.listdir('.')
-                )
-
-                files_to_add = ['.version']
-
-                # Only update gitflow.py if we're in the gitflow repository
-                if is_gitflow_repo:
-                    # Update __version__ in gitflow.py
-                    with open('gitflow.py', 'r') as f:
+                if has_pyproject:
+                    # Update version in pyproject.toml
+                    with open('pyproject.toml', 'r') as f:
                         content = f.read()
 
-                    # Replace version using regex to handle different quote styles
                     new_content = re.sub(
-                        r'__version__\s*=\s*["\'].*?["\']',
-                        f'__version__ = "{version}"',
-                        content
+                        r'^version\s*=\s*["\'].*?["\']',
+                        f'version = "{version}"',
+                        content,
+                        flags=re.MULTILINE
                     )
 
-                    with open('gitflow.py', 'w') as f:
+                    with open('pyproject.toml', 'w') as f:
                         f.write(new_content)
 
-                    files_to_add.append('gitflow.py')
+                    files_to_add.append('pyproject.toml')
+                else:
+                    # Fallback to .version file for repos without pyproject.toml
+                    with open('.version', 'w') as f:
+                        f.write(version + '\n')
+                    files_to_add.append('.version')
 
                 # Add files and commit
                 self.repo.git.add(files_to_add)
@@ -1384,7 +1386,8 @@ class GitWrapper:
                     self.console.print(f"[green]Updated repository version to {version}[/green]")
             else:
                 if not silent:
-                    self.console.print(f"[yellow]Version {version} already set in .version file[/yellow]")
+                    version_file = "pyproject.toml" if has_pyproject else ".version"
+                    self.console.print(f"[yellow]Version {version} already set in {version_file}[/yellow]")
 
         except Exception as e:
             self.console.print(f"[red]Error updating repository version: {e}[/red]")
