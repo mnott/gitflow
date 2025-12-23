@@ -1,0 +1,25 @@
+[project]
+name = "dev-gitflow"
+version = "1.0.24"
+description = "A GitFlow workflow automation tool"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "InquirerPy==0.3.4",
+    "typer>=0.15.0",
+    "doc2md==0.1.0",
+    "rich==13.7.1",
+    "python-docx>=0.8.11",
+    "markdown>=3.5.1",
+    "beautifulsoup4>=4.12.2",
+    "tinycss>=0.4",
+    "requests>=2.31.0",
+    "certifi>=2024.2.2",
+    "urllib3>=2.0.7",
+    "click",
+    "gitpython",
+    "pytz",
+]
+
+[project.scripts]
+gf = "gitflow:app"
